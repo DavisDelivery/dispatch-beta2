@@ -1,0 +1,18 @@
+# Netlify configuration for dispatch-beta2
+# CD: builds on push to main; deploy previews on PRs.
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# SPA fallback so react-router client routes resolve on direct hits / refresh.
+# Netlify resolves static assets and /.netlify/functions/* BEFORE this catch-all,
+# so the API function and /test-fixtures/*.json are unaffected.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
