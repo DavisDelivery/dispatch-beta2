@@ -34,19 +34,31 @@ src/
   App.jsx             # routes
   version.js          # APP_VERSION + build identity (badge)
   index.css           # mobile-first styles (single 768px breakpoint)
-  components/         # Layout (nav shell), BuildBadge, SortableTh, ComingSoon
+  components/         # Layout, BuildBadge, SortableTh, SortPills, StopChips,
+                      #   StopCard, ComingSoon
   hooks/              # useSortableTable
-  lib/                # format, stopsApi, stopColumns
-  pages/              # Dashboard, Workbench, Loads (stubs), Stops (built)
+  lib/                # format, parseStopComments(.ts) + tests, stopView,
+                      #   loadsModel, nuvizzApi (client data access)
+  pages/              # Dashboard, Loads, Stops (built); Workbench (stub)
 netlify/functions/
-  stops.cjs           # GET endpoint -> normalized stops (the only HTTP surface)
-  lib/nuvizz.cjs      # NuVizz v7 read client (shared code; read-only; direct-live)
-public/test-fixtures/ # nuvizz-today-stops.json (mock-mode fixture)
+  nuvizz.cjs          # GET endpoint: ?path=__fleet|__fleetstops|__driver|
+                      #   __refreshLoad (the only HTTP surface)
+  lib/nuvizz.cjs      # NuVizz v7 read client (read-only; stateless HTTP Basic;
+                      #   live range-scan discovery; no Firestore)
+public/test-fixtures/ # nuvizz-today-loads.json (mock-mode fixture: loads+stops)
 ```
 
 ## Mock vs live
 
-- `VITE_USE_MOCK_NUVIZZ=true` → Stops renders the bundled fixture, no creds
-  needed (used for the first deploy preview and for `npm run dev`).
-- `VITE_USE_MOCK_NUVIZZ=false` + the `NUVIZZ_*` server vars → Stops shows live
-  NuVizz data via `GET /.netlify/functions/stops`.
+- `VITE_USE_MOCK_NUVIZZ=true` → pages render the bundled loads fixture, no creds
+  needed (first deploy preview + `npm run dev`). Handled client-side in
+  `src/lib/nuvizzApi.js`; the function is never called.
+- `VITE_USE_MOCK_NUVIZZ=false` + the `NUVIZZ_*` server vars → live NuVizz data
+  via `GET /.netlify/functions/nuvizz?path=…`.
+
+## Comment parser (the keystone)
+
+`src/lib/parseStopComments.ts` is a PURE module turning NuVizz `SPL-INSTR-TEXT`
+free text into chips + an advisory receiving window + Non-Uline Rev, without ever
+dropping the operator's verbatim words (raw → flags → `other[]`). Receiving hours
+are ADVISORY ONLY (`RECEIVING_HOURS_HARD = false`). Tests: `npm test`.

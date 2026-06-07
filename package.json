@@ -1,13 +1,14 @@
 {
   "name": "dispatch-beta2",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
-  "description": "Davis Delivery Beta 2 — mobile-first dispatch cockpit (NuVizz read-only foundation).",
+  "description": "Davis Delivery Beta 2 — mobile-first dispatch cockpit (NuVizz read-only).",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "react": "^18.3.1",

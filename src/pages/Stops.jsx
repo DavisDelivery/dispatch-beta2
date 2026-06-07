@@ -1,75 +1,87 @@
 import { useEffect, useMemo, useState } from 'react'
-import { loadStops, IS_MOCK } from '../lib/stopsApi.js'
-import {
-  STOP_COLUMNS,
-  STOP_COLUMN_TYPES,
-  STOP_SEARCH_KEYS,
-} from '../lib/stopColumns.js'
+import { fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
+import { buildStopView, STATUS_FILTERS, matchesStatusFilter } from '../lib/stopView.js'
+import { STOP_CHIPS } from '../lib/parseStopComments.ts'
 import { useSortableTable } from '../hooks/useSortableTable.js'
-import SortableTh from '../components/SortableTh.jsx'
+import StopCard from '../components/StopCard.jsx'
+import { ChipLegend } from '../components/StopChips.jsx'
+import SortPills from '../components/SortPills.jsx'
 
-const PER_PAGE_OPTIONS = [10, 25, 50, 100]
+// Stops Intelligence — the keystone. Each stop's comments are parsed into chips,
+// a soft (advisory) receiving window, appointment reality and Non-Uline Rev.
+const SORT_OPTIONS = [
+  { key: 'plannedEta', label: 'ETA' },
+  { key: 'name', label: 'Customer' },
+  { key: 'revenue', label: 'Non-Uline Rev' },
+  { key: 'recvStart', label: 'Receiving Hrs' },
+]
+const SORT_TYPES = { plannedEta: 'date', name: 'text', revenue: 'number', recvStart: 'text' }
 
 export default function Stops() {
-  const [state, setState] = useState({ status: 'loading', stops: [], meta: {}, error: '' })
-
-  const [search, setSearch] = useState('')
+  const [state, setState] = useState({ status: 'loading', stops: [], error: '' })
   const [statusFilter, setStatusFilter] = useState('All')
-  const [perPage, setPerPage] = useState(25)
-  const [page, setPage] = useState(1)
+  const [chipFilters, setChipFilters] = useState({}) // key -> bool
+  const [recvOnly, setRecvOnly] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    setState({ status: 'loading', stops: [], meta: {}, error: '' })
-    loadStops({ horizon: 'today' })
-      .then(({ stops, meta }) => {
-        if (!cancelled) setState({ status: 'ready', stops, meta, error: '' })
+    setState({ status: 'loading', stops: [], error: '' })
+    fetchFleetStops({ date: 'today' })
+      .then(({ stops }) => {
+        if (!cancelled) setState({ status: 'ready', stops, error: '' })
       })
       .catch((err) => {
-        if (!cancelled) setState({ status: 'error', stops: [], meta: {}, error: err.message })
+        if (!cancelled) setState({ status: 'error', stops: [], error: err.message })
       })
     return () => {
       cancelled = true
     }
   }, [])
 
-  // Distinct status values for the filter dropdown.
-  const statusOptions = useMemo(() => {
-    const set = new Set(
-      state.stops.map((s) => s.status).filter((v) => v != null && v !== ''),
-    )
-    return ['All', ...[...set].sort((a, b) => a.localeCompare(b))]
-  }, [state.stops])
+  // Parse every stop once.
+  const views = useMemo(() => state.stops.map(buildStopView), [state.stops])
 
-  // Apply status filter + quick-search before sorting.
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return state.stops.filter((row) => {
-      if (statusFilter !== 'All' && row.status !== statusFilter) return false
-      if (!q) return true
-      const haystack = STOP_SEARCH_KEYS.map((k) => row[k] ?? '')
-        .join(' ')
-        .toLowerCase()
-      return haystack.includes(q)
-    })
-  }, [state.stops, statusFilter, search])
-
-  const { sortedItems, sortKey, sortDirection, requestSort } = useSortableTable(
-    filtered,
-    { initialKey: 'stopNumber', initialDirection: 'asc', types: STOP_COLUMN_TYPES },
+  const activeChipKeys = useMemo(
+    () => STOP_CHIPS.filter((c) => chipFilters[c.key]).map((c) => c.key),
+    [chipFilters],
   )
 
-  // Reset to first page whenever the result set changes shape.
-  useEffect(() => {
-    setPage(1)
-  }, [search, statusFilter, perPage])
+  // Filters are ANDed: status + every active chip + has-receiving-hours.
+  const filtered = useMemo(() => {
+    return views.filter((v) => {
+      if (!matchesStatusFilter(v, statusFilter)) return false
+      for (const key of activeChipKeys) {
+        if (!v.parsed[key]) return false
+      }
+      if (recvOnly && !v.parsed.receivingHours) return false
+      return true
+    })
+  }, [views, statusFilter, activeChipKeys, recvOnly])
 
-  const totalPages = Math.max(1, Math.ceil(sortedItems.length / perPage))
-  const currentPage = Math.min(page, totalPages)
-  const startIdx = sortedItems.length === 0 ? 0 : (currentPage - 1) * perPage
-  const pageItems = sortedItems.slice(startIdx, startIdx + perPage)
-  const showingFrom = sortedItems.length === 0 ? 0 : startIdx + 1
-  const showingTo = startIdx + pageItems.length
+  const { sortedItems, sortKey, sortDirection, requestSort } = useSortableTable(filtered, {
+    initialKey: 'plannedEta',
+    initialDirection: 'asc',
+    types: SORT_TYPES,
+  })
+
+  // Live counts for each filter control.
+  const statusCounts = useMemo(() => {
+    const counts = {}
+    for (const f of STATUS_FILTERS) counts[f] = views.filter((v) => matchesStatusFilter(v, f)).length
+    return counts
+  }, [views])
+
+  const chipCounts = useMemo(() => {
+    const counts = {}
+    for (const c of STOP_CHIPS) counts[c.key] = views.filter((v) => v.parsed[c.key]).length
+    return counts
+  }, [views])
+
+  const recvCount = useMemo(() => views.filter((v) => v.parsed.receivingHours).length, [views])
+
+  function toggleChip(key) {
+    setChipFilters((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
 
   return (
     <section className="page page--stops">
@@ -81,12 +93,8 @@ export default function Stops() {
         <p className="stops__count">
           {state.status === 'ready' ? (
             <>
-              Showing <strong>{showingFrom}–{showingTo}</strong> of{' '}
               <strong>{sortedItems.length}</strong>
-              {sortedItems.length !== state.stops.length && (
-                <> (filtered from {state.stops.length})</>
-              )}{' '}
-              stops · today
+              {sortedItems.length !== views.length && <> (of {views.length})</>} stops · today
             </>
           ) : (
             <>&nbsp;</>
@@ -94,107 +102,68 @@ export default function Stops() {
         </p>
       </div>
 
-      <div className="stops__controls">
-        <input
-          type="search"
-          className="control control--search"
-          placeholder="Quick search…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          aria-label="Quick search stops"
-        />
-        <label className="control control--select">
-          <span className="control__label">Status</span>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            {statusOptions.map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="control control--select">
-          <span className="control__label">Per page</span>
-          <select
-            value={perPage}
-            onChange={(e) => setPerPage(Number(e.target.value))}
+      {/* Status filter */}
+      <div className="filterbar">
+        {STATUS_FILTERS.map((f) => (
+          <button
+            key={f}
+            type="button"
+            className={`filterchip ${statusFilter === f ? 'is-active' : ''}`}
+            aria-pressed={statusFilter === f}
+            onClick={() => setStatusFilter(f)}
           >
-            {PER_PAGE_OPTIONS.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-        </label>
+            {f} <span className="filterchip__n">{statusCounts[f] ?? 0}</span>
+          </button>
+        ))}
       </div>
 
+      {/* Per-chip toggle filters + receiving-hours toggle */}
+      <div className="filterbar filterbar--chips">
+        {STOP_CHIPS.map((c) => (
+          <button
+            key={c.key}
+            type="button"
+            className={`filterchip filterchip--chip ${chipFilters[c.key] ? 'is-active' : ''}`}
+            aria-pressed={!!chipFilters[c.key]}
+            style={{ '--chip': c.color }}
+            onClick={() => toggleChip(c.key)}
+          >
+            {c.label} <span className="filterchip__n">{chipCounts[c.key] ?? 0}</span>
+          </button>
+        ))}
+        <button
+          type="button"
+          className={`filterchip ${recvOnly ? 'is-active' : ''}`}
+          aria-pressed={recvOnly}
+          onClick={() => setRecvOnly((v) => !v)}
+        >
+          Receiving hrs <span className="filterchip__n">{recvCount}</span>
+        </button>
+      </div>
+
+      <SortPills
+        options={SORT_OPTIONS}
+        sortKey={sortKey}
+        sortDirection={sortDirection}
+        onSort={requestSort}
+      />
+
+      <ChipLegend />
+
       {state.status === 'loading' && <p className="stops__msg">Loading stops…</p>}
-
       {state.status === 'error' && (
-        <p className="stops__msg stops__msg--error">
-          Could not load stops: {state.error}
-        </p>
+        <p className="stops__msg stops__msg--error">Could not load stops: {state.error}</p>
       )}
-
       {state.status === 'ready' && sortedItems.length === 0 && (
         <p className="stops__msg">No stops match the current filters.</p>
       )}
 
       {state.status === 'ready' && sortedItems.length > 0 && (
-        <>
-          <div className="table-scroll">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  {STOP_COLUMNS.map((col) => (
-                    <SortableTh
-                      key={col.key}
-                      columnKey={col.key}
-                      label={col.label}
-                      align={col.align}
-                      sortKey={sortKey}
-                      sortDirection={sortDirection}
-                      onSort={requestSort}
-                    />
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {pageItems.map((row, i) => (
-                  <tr key={row.stopNumber ?? row.shipmentNumber ?? i}>
-                    {STOP_COLUMNS.map((col) => (
-                      <td key={col.key} className={`align-${col.align}`}>
-                        {col.render(row[col.key])}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="pager">
-            <button
-              type="button"
-              className="pager__btn"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage <= 1}
-            >
-              ‹ Prev
-            </button>
-            <span className="pager__status">
-              Page {currentPage} of {totalPages}
-            </span>
-            <button
-              type="button"
-              className="pager__btn"
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage >= totalPages}
-            >
-              Next ›
-            </button>
-          </div>
-        </>
+        <div className="stoplist">
+          {sortedItems.map((v, i) => (
+            <StopCard key={`${v.stop.loadNbr}-${v.stop.stopNbr}-${i}`} view={v} />
+          ))}
+        </div>
       )}
     </section>
   )

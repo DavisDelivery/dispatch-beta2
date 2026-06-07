@@ -3,47 +3,41 @@
 /**
  * NuVizz DeliverIT v7 read client — READ-ONLY.
  *
- * ===========================================================================
- *  ⚠️  RECONSTRUCTED CLIENT — READ THIS BEFORE THE FIRST LIVE TEST (P5)
- * ===========================================================================
- *  This file was authored for dispatch-beta2 from the env-var contract in the
- *  v0.1.0 brief. The original `netlify/functions/nuvizz.cjs` in the
- *  DavisDelivery/davis-nuvizz repo was NOT reachable from this session
- *  (out of repo scope), so the exact NuVizz v7 HTTP shape (login endpoint,
- *  stops query endpoint, response envelope) is reconstructed and must be
- *  reconciled with the real client before relying on the live path.
+ * Built from the VERIFIED read contract (extracted from Davis's real, deployed
+ * NuVizz client). Key facts that drive the design:
  *
- *  What IS authoritative here (matches the brief exactly):
- *    - Required env vars: NUVIZZ_DAVIS_COMPANY_CODE, NUVIZZ_DAVIS_USER,
- *      NUVIZZ_DAVIS_PASS, NUVIZZ_BASE_URL.
- *    - READ-ONLY: no dispatch/assign/tender/write paths are ported.
- *    - STANDALONE: a DIRECT LIVE read of NuVizz. No Firestore cache
- *      (nuvizz_stop_index) and no dispatch-map cron coupling.
+ *   - AUTH is stateless HTTP Basic on EVERY request. There is NO login / JWT /
+ *     session step.
+ *   - There is NO "list loads" or "list stops" endpoint. You DISCOVER a day's
+ *     loads by scanning a contiguous range of load numbers in parallel and
+ *     keeping the ones whose earliestStartDttm date matches the target date.
+ *   - beta2 is STANDALONE: live-scan only, NO Firestore. A short in-memory cache
+ *     per warm function instance is the only caching (loads 60s; per-date scan
+ *     calibration ~10 min).
  *
- *  What to VERIFY against davis-nuvizz/nuvizz.cjs (search for "VERIFY:"):
- *    - the login path + request/response field names,
- *    - the stops query path + how "today"/horizon is expressed,
- *    - the response envelope and the raw per-stop field names in normalizeStop.
- *
- *  Endpoint paths can be corrected WITHOUT code changes via the optional
- *  NUVIZZ_LOGIN_PATH / NUVIZZ_STOPS_PATH env vars (see getConfig).
- * ===========================================================================
+ * READ-ONLY: no write / assign / dispatch / tender paths exist here.
  */
 
-const REQUIRED_VARS = [
-  'NUVIZZ_DAVIS_COMPANY_CODE',
-  'NUVIZZ_DAVIS_USER',
-  'NUVIZZ_DAVIS_PASS',
-  'NUVIZZ_BASE_URL',
-]
+const REQUIRED_VARS = ['NUVIZZ_DAVIS_USER', 'NUVIZZ_DAVIS_PASS']
 
-const DEFAULT_TIMEOUT_MS = 15000
+const DEFAULT_BASE_URL = 'https://portal.nuvizz.com/deliverit/openapi/v7'
+const DEFAULT_TIMEOUT_MS = 12000
+const SCAN_CONCURRENCY = 50
+const SCAN_HALF_WINDOW = 300 // center-300 .. center+300
+const LOAD_CACHE_TTL_MS = 60 * 1000
+const CALIBRATION_TTL_MS = 10 * 60 * 1000
+
+// Anchor calibration: the real 2026-06-05 range was 196094..196192 (center
+// ~196143). Davis dispatches ~100 loads per business day, zero on weekends.
+const ANCHOR_DATE = '2026-06-05'
+const ANCHOR_CENTER = 196143
+const LOADS_PER_BUSINESS_DAY = 100
 
 class NuvizzError extends Error {
   constructor(message, code) {
     super(message)
     this.name = 'NuvizzError'
-    this.code = code // 'CONFIG' | 'AUTH' | 'UPSTREAM'
+    this.code = code // 'CONFIG' | 'UPSTREAM'
   }
 }
 
@@ -55,138 +49,371 @@ function getConfig(env = process.env) {
       'CONFIG',
     )
   }
+  const companyCode = (env.NUVIZZ_DAVIS_COMPANY_CODE || 'DAVIS').toUpperCase()
+  const auth = Buffer.from(
+    `${env.NUVIZZ_DAVIS_USER}:${env.NUVIZZ_DAVIS_PASS}`,
+  ).toString('base64')
   return {
-    companyCode: env.NUVIZZ_DAVIS_COMPANY_CODE,
-    user: env.NUVIZZ_DAVIS_USER,
-    pass: env.NUVIZZ_DAVIS_PASS,
-    baseUrl: env.NUVIZZ_BASE_URL,
-    // Optional overrides for reconciliation (see header note).
-    loginPath: env.NUVIZZ_LOGIN_PATH || '/login',
-    stopsPath: env.NUVIZZ_STOPS_PATH || '/stops',
+    companyCode,
+    baseUrl: (env.NUVIZZ_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, ''),
+    authHeader: `Basic ${auth}`,
   }
 }
 
-function joinUrl(base, path) {
-  return `${base.replace(/\/+$/, '')}/${String(path).replace(/^\/+/, '')}`
+// ---------------------------------------------------------------------------
+// Date math — business days drive the scan center.
+// ---------------------------------------------------------------------------
+function resolveDate(date) {
+  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) return date
+  return new Date().toISOString().slice(0, 10)
 }
 
-async function httpJson(url, options = {}) {
+function businessDaysBetween(startISO, endISO) {
+  const start = new Date(`${startISO}T00:00:00Z`)
+  const end = new Date(`${endISO}T00:00:00Z`)
+  if (start.getTime() === end.getTime()) return 0
+  const sign = end > start ? 1 : -1
+  let count = 0
+  const cur = new Date(start)
+  while (cur.getTime() !== end.getTime()) {
+    cur.setUTCDate(cur.getUTCDate() + sign)
+    const dow = cur.getUTCDay() // 0 Sun .. 6 Sat
+    if (dow !== 0 && dow !== 6) count += sign
+  }
+  return count
+}
+
+function estimateCenter(targetDate) {
+  return ANCHOR_CENTER + businessDaysBetween(ANCHOR_DATE, targetDate) * LOADS_PER_BUSINESS_DAY
+}
+
+function padLoadNbr(companyCode, n) {
+  return `${companyCode}${String(n).padStart(9, '0')}`
+}
+
+// ---------------------------------------------------------------------------
+// Caches (per warm instance).
+// ---------------------------------------------------------------------------
+const loadCache = new Map() // loadNbr -> { at, load }
+const calibration = new Map() // date -> { at, min, max }
+
+function cacheGetLoad(loadNbr) {
+  const hit = loadCache.get(loadNbr)
+  if (hit && Date.now() - hit.at < LOAD_CACHE_TTL_MS) return hit.load
+  return undefined
+}
+function cacheSetLoad(loadNbr, load) {
+  loadCache.set(loadNbr, { at: Date.now(), load })
+}
+
+// ---------------------------------------------------------------------------
+// HTTP — single load fetch.
+// ---------------------------------------------------------------------------
+async function httpJson(url, cfg) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS)
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal })
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { accept: 'application/json', authorization: cfg.authHeader },
+      signal: controller.signal,
+    })
+    if (res.status === 404) return null
     const text = await res.text()
-    let body
-    try {
-      body = text ? JSON.parse(text) : {}
-    } catch {
-      body = { raw: text }
-    }
     if (!res.ok) {
-      const msg = body?.message || body?.error || `HTTP ${res.status}`
-      throw new NuvizzError(`NuVizz upstream error: ${msg}`, 'UPSTREAM')
+      throw new NuvizzError(`NuVizz HTTP ${res.status} for ${url}`, 'UPSTREAM')
     }
-    return body
+    if (!text) return null
+    try {
+      return JSON.parse(text)
+    } catch {
+      return null
+    }
   } catch (err) {
-    if (err.name === 'AbortError') {
-      throw new NuvizzError('NuVizz request timed out', 'UPSTREAM')
-    }
-    throw err
+    if (err.name === 'AbortError') return null // a slow probe is treated as a miss
+    if (err instanceof NuvizzError) throw err
+    return null
   } finally {
     clearTimeout(timer)
   }
 }
 
-// VERIFY: login path, request body field names, and where the token lives in
-// the response. NuVizz DeliverIT typically returns a bearer/session token.
-async function login(cfg) {
-  const body = await httpJson(joinUrl(cfg.baseUrl, cfg.loginPath), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({
-      companyCode: cfg.companyCode,
-      userName: cfg.user,
-      password: cfg.pass,
-    }),
-  })
-  const token =
-    body.token ||
-    body.access_token ||
-    body.accessToken ||
-    body.sessionId ||
-    body?.data?.token
-  if (!token) {
-    throw new NuvizzError('NuVizz login returned no token', 'AUTH')
-  }
-  return token
+// GET {BASE}/load/info/{loadNbr}/{companyCode} -> raw { Load: {...} } or null.
+async function fetchLoadRaw(cfg, loadNbr) {
+  const cached = cacheGetLoad(loadNbr)
+  if (cached !== undefined) return cached
+  const url = `${cfg.baseUrl}/load/info/${loadNbr}/${cfg.companyCode}`
+  const body = await httpJson(url, cfg)
+  const load = body && body.Load ? body.Load : null
+  cacheSetLoad(loadNbr, load)
+  return load
 }
 
-// VERIFY: stops query path + how the date horizon is passed.
-async function fetchStopsRaw(cfg, token, { horizon }) {
-  const url = new URL(joinUrl(cfg.baseUrl, cfg.stopsPath))
-  url.searchParams.set('companyCode', cfg.companyCode)
-  // "today" -> a yyyy-mm-dd date the API can filter on (wire format only;
-  // the UI never renders ISO — see src/lib/format.js).
-  url.searchParams.set('date', resolveHorizonDate(horizon))
-
-  const body = await httpJson(url.toString(), {
-    method: 'GET',
-    headers: {
-      accept: 'application/json',
-      authorization: `Bearer ${token}`,
-    },
-  })
-  // Accept the common NuVizz envelopes plus a bare array.
-  if (Array.isArray(body)) return body
-  return body.stops || body.data || body.result?.stops || body.items || []
-}
-
-// horizon: 'today' (default) or a yyyy-mm-dd string. Returns a wire date.
-function resolveHorizonDate(horizon) {
-  if (horizon && /^\d{4}-\d{2}-\d{2}$/.test(horizon)) return horizon
-  return new Date().toISOString().slice(0, 10)
-}
-
+// ---------------------------------------------------------------------------
+// Normalizers — VERIFIED field map.
+// ---------------------------------------------------------------------------
 const num = (v) => {
   if (v == null || v === '') return null
   const n = Number(v)
   return Number.isNaN(n) ? null : n
 }
-const pick = (...vals) => vals.find((v) => v != null && v !== '') ?? ''
+const str = (v) => (v == null ? '' : String(v))
 
-// Map a raw NuVizz stop to the normalized record the UI/fixture share.
-// VERIFY: the raw source field names below against a real NuVizz payload.
-function normalizeStop(raw = {}) {
+function loadDate(load) {
+  const d = load?.loadHeader?.earliestStartDttm
+  return d ? String(d).slice(0, 10) : ''
+}
+
+// Flatten the verbatim SPL-INSTR-TEXT comment strings off a stop entry.
+function flattenComments(entry) {
+  const out = []
+  const pull = (arr) => {
+    if (!Array.isArray(arr)) return
+    for (const c of arr) {
+      const text = c && c.commentDescription
+      if (text != null && String(text).trim() !== '') out.push(String(text))
+    }
+  }
+  const stop = entry?.stop || {}
+  pull(stop.comments)
+  pull(stop.to && stop.to.comments)
+  pull(stop.from && stop.from.comments)
+  return out
+}
+
+const STATUS_LABELS = {
+  10: 'Pending',
+  30: 'Scheduled',
+  40: 'En Route',
+  50: 'Exception',
+  90: 'Delivered',
+}
+
+function normalizeStop(load, entry) {
+  const stop = entry?.stop || {}
+  const addr = (stop.to && stop.to.address) || {}
+  const sched = (stop.to && stop.to.schedule) || {}
+  const exec = entry?.stopExecutionInfo || {}
+  const execTo = exec.to || {}
+  const code = num(exec.stopStatus)
+  const exceptions = Array.isArray(exec.exceptions) ? exec.exceptions : []
+  const exceptionPresent = exec.exceptionPresent === true
+  const trueException = exceptionPresent || exceptions.length > 0
+
   return {
-    stopNumber: pick(raw.stopNumber, raw.stopNo, raw.stop_number, raw.stopSeq),
-    stopCreated: pick(raw.stopCreated, raw.createdDate, raw.createdOn, raw.creationDate),
-    shipmentNumber: pick(raw.shipmentNumber, raw.shipmentNo, raw.shipmentId),
-    driverName: pick(raw.driverName, raw.driver, raw.driverFullName),
-    loadName: pick(raw.loadName, raw.routeName, raw.manifestName, raw.loadNo),
-    shipToName: pick(raw.shipToName, raw.consigneeName, raw.customerName),
-    address1: pick(raw.address1, raw.addressLine1, raw.addr1),
-    address2: pick(raw.address2, raw.addressLine2, raw.addr2),
-    city: pick(raw.city, raw.cityName),
-    zip: pick(raw.zip, raw.zipCode, raw.postalCode),
-    totalCartons: num(pick(raw.totalCartons, raw.cartons, raw.pieceCount, raw.qty)),
-    volume: num(pick(raw.volume, raw.totalVolume, raw.cube)),
-    weight: num(pick(raw.weight, raw.totalWeight)),
-    status: pick(raw.status, raw.stopStatus, raw.statusDescription),
-    sealNbr: pick(raw.sealNbr, raw.sealNumber, raw.seal),
-    comments: pick(raw.comments, raw.notes, raw.comment, raw.specialInstructions),
+    loadNbr: str(load?.loadHeader?.loadNbr),
+    loadId: str(load?.loadHeader?.loadId),
+    routeName: str(load?.loadHeader?.routeName),
+    driverName: str(load?.loadAssignment?.driverName),
+    driverUserName: str(load?.loadAssignment?.driverUserName),
+
+    stopNbr: str(stop.stopNbr),
+    stopType: str(stop.stopType),
+    bol: str(stop.bol),
+    totalPallets: num(stop.totalPallets),
+    totalCartons: num(stop.totalCartons),
+    weight: num(stop.weight),
+    sealNbr: stop.sealNbr || null,
+
+    name: str(addr.name),
+    addr1: str(addr.addr1),
+    city: str(addr.city),
+    state: str(addr.state),
+    zip: str(addr.zip),
+    latitude: num(addr.latitude),
+    longitude: num(addr.longitude),
+
+    apptFrom: sched.timeFrom || null,
+    apptTo: sched.timeTo || null,
+    comments: flattenComments(entry),
+
+    stopStatus: code,
+    statusLabel: STATUS_LABELS[code] || 'Unknown',
+    exceptionPresent,
+    exceptionCount: exceptions.length,
+    trueException,
+
+    plannedEta: execTo.plannedEtaDTTM || null,
+    eta: execTo.etaDttm || null,
+    arrival: execTo.arrivalDTTM || null,
+    confirmed: execTo.confirmedDTTM || null,
+    etaCode: execTo.etaCode != null ? str(execTo.etaCode) : null,
+    duration: execTo.duration != null ? num(execTo.duration) : null,
   }
 }
 
-/**
- * Live, read-only fetch of today's (or a horizon's) normalized stops.
- * @param {{ horizon?: string, env?: object }} opts
- * @returns {Promise<object[]>}
- */
-async function getStops({ horizon = 'today', env } = {}) {
-  const cfg = getConfig(env)
-  const token = await login(cfg)
-  const raw = await fetchStopsRaw(cfg, token, { horizon })
-  return raw.map(normalizeStop)
+// stopSeq is ALWAYS 1 and useless — sort by plannedEta, empties last.
+function byPlannedEta(a, b) {
+  const av = a.plannedEta
+  const bv = b.plannedEta
+  if (!av && !bv) return 0
+  if (!av) return 1
+  if (!bv) return -1
+  return new Date(av).getTime() - new Date(bv).getTime()
 }
 
-module.exports = { getStops, normalizeStop, getConfig, NuvizzError }
+function normalizeStops(load) {
+  const entries = Array.isArray(load?.stops) ? load.stops : []
+  return entries.map((e) => normalizeStop(load, e)).sort(byPlannedEta)
+}
+
+function normalizeLoadSummary(load) {
+  const h = load?.loadHeader || {}
+  const a = load?.loadAssignment || {}
+  const x = load?.loadExecutionInfo || {}
+  const stops = normalizeStops(load)
+  const stopsDelivered = stops.filter((s) => s.stopStatus === 90).length
+  const stopsExceptions = stops.filter((s) => s.trueException).length
+
+  return {
+    loadId: str(h.loadId),
+    loadNbr: str(h.loadNbr),
+    routeName: str(h.routeName),
+    vehicleType: str(h.vehicleType),
+    totalPallets: num(h.totalPallets),
+    totalCartons: num(h.totalCartons),
+    weight: num(h.weight),
+    weightUOM: str(h.weightUOM),
+    volume: num(h.volume),
+    volumeUOM: str(h.volumeUOM),
+    pronbr: str(h.pronbr),
+    reference: str(h.reference),
+    earliestStart: h.earliestStartDttm || null,
+    latestStart: h.latestStartDttm || null,
+    originName: str(h.originName),
+    originCity: str(h.originCity),
+    originState: str(h.originState),
+    originZip: str(h.originZip),
+    driverName: str(a.driverName),
+    driverUserName: str(a.driverUserName),
+    driverEmail: str(a.driverEmail),
+    loadStatus: str(x.loadStatus),
+    stopCount: stops.length,
+    stopsDelivered,
+    stopsExceptions,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Range scan — discover a date's loads.
+// ---------------------------------------------------------------------------
+async function scanRange(cfg, lo, hi, targetDate) {
+  const numbers = []
+  for (let n = lo; n <= hi; n++) numbers.push(n)
+
+  const found = []
+  let cursor = 0
+  async function worker() {
+    while (cursor < numbers.length) {
+      const n = numbers[cursor++]
+      const loadNbr = padLoadNbr(cfg.companyCode, n)
+      const load = await fetchLoadRaw(cfg, loadNbr)
+      if (load && loadDate(load) === targetDate) {
+        found.push({ n, load })
+      }
+    }
+  }
+  const workers = Array.from(
+    { length: Math.min(SCAN_CONCURRENCY, numbers.length) },
+    worker,
+  )
+  await Promise.all(workers)
+  return found
+}
+
+async function discoverLoads(cfg, targetDate) {
+  let lo
+  let hi
+  const cal = calibration.get(targetDate)
+  if (cal && Date.now() - cal.at < CALIBRATION_TTL_MS) {
+    lo = cal.min
+    hi = cal.max
+  } else {
+    const center = estimateCenter(targetDate)
+    lo = center - SCAN_HALF_WINDOW
+    hi = center + SCAN_HALF_WINDOW
+  }
+
+  const found = await scanRange(cfg, lo, hi, targetDate)
+
+  // Calibrate for fast re-scans, but only narrow on a confident (>=50) result —
+  // an early-morning partial scan must not clamp the range.
+  if (found.length >= 50) {
+    const ns = found.map((f) => f.n)
+    calibration.set(targetDate, {
+      at: Date.now(),
+      min: Math.min(...ns) - 20,
+      max: Math.max(...ns) + 100,
+    })
+  }
+
+  return found.map((f) => f.load)
+}
+
+// ---------------------------------------------------------------------------
+// Public read API.
+// ---------------------------------------------------------------------------
+async function getFleet({ date, env } = {}) {
+  const cfg = getConfig(env)
+  const targetDate = resolveDate(date)
+  const loads = await discoverLoads(cfg, targetDate)
+  // Per-load summaries; per-load stops are stripped from this response.
+  const summaries = loads
+    .map(normalizeLoadSummary)
+    .sort((a, b) => a.loadNbr.localeCompare(b.loadNbr))
+  return { date: targetDate, count: summaries.length, loads: summaries }
+}
+
+async function getFleetStops({ date, env } = {}) {
+  const cfg = getConfig(env)
+  const targetDate = resolveDate(date)
+  const loads = await discoverLoads(cfg, targetDate)
+  const stops = loads.flatMap(normalizeStops).sort(byPlannedEta)
+  return { date: targetDate, count: stops.length, stops }
+}
+
+async function getDriver({ date, userName, env } = {}) {
+  const cfg = getConfig(env)
+  const targetDate = resolveDate(date)
+  const wanted = String(userName || '').toLowerCase()
+  const loads = await discoverLoads(cfg, targetDate)
+  const mine = loads.filter(
+    (l) => str(l?.loadAssignment?.driverUserName).toLowerCase() === wanted,
+  )
+  // Re-fetch each matched load live so the driver's view is freshest.
+  const fresh = []
+  for (const l of mine) {
+    const loadNbr = str(l?.loadHeader?.loadNbr)
+    const refreshed = (await fetchLoadRaw(cfg, loadNbr)) || l
+    fresh.push(refreshed)
+  }
+  const summaries = fresh.map(normalizeLoadSummary)
+  const stops = fresh.flatMap(normalizeStops).sort(byPlannedEta)
+  return { date: targetDate, userName, count: summaries.length, loads: summaries, stops }
+}
+
+async function refreshLoad({ loadNbr, env } = {}) {
+  const cfg = getConfig(env)
+  loadCache.delete(loadNbr)
+  const load = await fetchLoadRaw(cfg, loadNbr)
+  if (!load) return { loadNbr, load: null }
+  return {
+    loadNbr,
+    load: { ...normalizeLoadSummary(load), stops: normalizeStops(load) },
+  }
+}
+
+module.exports = {
+  getConfig,
+  getFleet,
+  getFleetStops,
+  getDriver,
+  refreshLoad,
+  NuvizzError,
+  // exported for unit reasoning / reuse
+  businessDaysBetween,
+  estimateCenter,
+  padLoadNbr,
+  normalizeLoadSummary,
+  normalizeStops,
+}
