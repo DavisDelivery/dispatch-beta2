@@ -35,6 +35,19 @@ export function formatDate(value, fallback = '—') {
   return d ? dayMonthYear.format(d) : fallback
 }
 
+// Time of day, 12h short form: "7:05a" / "3:30p". Accepts a Date, a timestamp
+// (ms), or an ISO string.
+export function formatTime(value, fallback = '—') {
+  const d = toDate(value)
+  if (!d) return fallback
+  const h = d.getHours()
+  const m = d.getMinutes()
+  const suffix = h < 12 ? 'a' : 'p'
+  let h12 = h % 12
+  if (h12 === 0) h12 = 12
+  return `${h12}:${String(m).padStart(2, '0')}${suffix}`
+}
+
 // Numbers: render with thousands separators; blanks stay blank.
 export function formatNumber(value, fallback = '—') {
   if (value == null || value === '') return fallback

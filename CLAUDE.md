@@ -35,18 +35,29 @@ src/
   version.js          # APP_VERSION + build identity (badge)
   index.css           # mobile-first styles (single 768px breakpoint)
   components/         # Layout, BuildBadge, SortableTh, SortPills, StopChips,
-                      #   StopCard, ComingSoon
+                      #   StopCard, FreshnessStamp, ComingSoon
   hooks/              # useSortableTable
   lib/                # format, parseStopComments(.ts) + tests, stopView,
                       #   loadsModel, nuvizzApi (client data access)
   pages/              # Dashboard, Loads, Stops (built); Workbench (stub)
 netlify/functions/
   nuvizz.cjs          # GET endpoint: ?path=__fleet|__fleetstops|__driver|
-                      #   __refreshLoad (the only HTTP surface)
+                      #   __refreshLoad|__refreshFleet (the only HTTP surface)
+  fleet-refresh-background.mjs # scheduled (*/5m) cron that warms the cache
   lib/nuvizz.cjs      # NuVizz v7 read client (read-only; stateless HTTP Basic;
-                      #   live range-scan discovery; no Firestore)
+                      #   CACHE-FIRST: L1 60s mem -> L2 Blobs -> L3 live scan)
+  lib/fleetCache.cjs  # graceful Netlify Blobs wrapper (warm fleet/stops cache)
 public/test-fixtures/ # nuvizz-today-loads.json (mock-mode fixture: loads+stops)
 ```
+
+## Warm cache (v0.2.1)
+
+The ~600-load range scan is OFF the request path. `fleet-refresh-background.mjs`
+runs every 5 min (weekdays) and calls `refreshFleetCache(date)`, which scans once
+and writes `fleet:<date>` / `stops:<date>` to Netlify Blobs. `getFleet` /
+`getFleetStops` / `getDriver` are cache-first (L1 in-memory → L2 Blobs → L3 live)
+and tag responses with `source: 'cache'|'live'` + `cachedAt`. Blobs is best-effort:
+any failure degrades to a live scan, never a crash. Manual warm: `?path=__refreshFleet`.
 
 ## Mock vs live
 

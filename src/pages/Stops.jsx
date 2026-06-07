@@ -6,6 +6,7 @@ import { useSortableTable } from '../hooks/useSortableTable.js'
 import StopCard from '../components/StopCard.jsx'
 import { ChipLegend } from '../components/StopChips.jsx'
 import SortPills from '../components/SortPills.jsx'
+import FreshnessStamp from '../components/FreshnessStamp.jsx'
 
 // Stops Intelligence — the keystone. Each stop's comments are parsed into chips,
 // a soft (advisory) receiving window, appointment reality and Non-Uline Rev.
@@ -18,20 +19,26 @@ const SORT_OPTIONS = [
 const SORT_TYPES = { plannedEta: 'date', name: 'text', revenue: 'number', recvStart: 'text' }
 
 export default function Stops() {
-  const [state, setState] = useState({ status: 'loading', stops: [], error: '' })
+  const [state, setState] = useState({ status: 'loading', stops: [], meta: null, error: '' })
   const [statusFilter, setStatusFilter] = useState('All')
   const [chipFilters, setChipFilters] = useState({}) // key -> bool
   const [recvOnly, setRecvOnly] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    setState({ status: 'loading', stops: [], error: '' })
+    setState({ status: 'loading', stops: [], meta: null, error: '' })
     fetchFleetStops({ date: 'today' })
-      .then(({ stops }) => {
-        if (!cancelled) setState({ status: 'ready', stops, error: '' })
+      .then((res) => {
+        if (!cancelled)
+          setState({
+            status: 'ready',
+            stops: res.stops,
+            meta: { source: res.source, cachedAt: res.cachedAt, mock: res.mock },
+            error: '',
+          })
       })
       .catch((err) => {
-        if (!cancelled) setState({ status: 'error', stops: [], error: err.message })
+        if (!cancelled) setState({ status: 'error', stops: [], meta: null, error: err.message })
       })
     return () => {
       cancelled = true
@@ -94,7 +101,8 @@ export default function Stops() {
           {state.status === 'ready' ? (
             <>
               <strong>{sortedItems.length}</strong>
-              {sortedItems.length !== views.length && <> (of {views.length})</>} stops · today
+              {sortedItems.length !== views.length && <> (of {views.length})</>} stops ·{' '}
+              <FreshnessStamp meta={state.meta} />
             </>
           ) : (
             <>&nbsp;</>

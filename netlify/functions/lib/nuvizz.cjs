@@ -15,14 +15,21 @@
  *     per warm function instance is the only caching (loads 60s; per-date scan
  *     calibration ~10 min).
  *
+ * v0.2.1: CACHE-FIRST. The ~600-load scan moves off the request path. Reads go
+ * L1 (60s in-memory) -> L2 (Netlify Blobs warm cache) -> L3 (live scan), and a
+ * scheduled background function keeps the Blobs cache warm.
+ *
  * READ-ONLY: no write / assign / dispatch / tender paths exist here.
  */
+
+const cache = require('./fleetCache.cjs')
 
 const REQUIRED_VARS = ['NUVIZZ_DAVIS_USER', 'NUVIZZ_DAVIS_PASS']
 
 const DEFAULT_BASE_URL = 'https://portal.nuvizz.com/deliverit/openapi/v7'
 const DEFAULT_TIMEOUT_MS = 12000
-const SCAN_CONCURRENCY = 50
+// Gentler now that scans are off the hot path (background-warmed).
+const SCAN_CONCURRENCY = 25
 const SCAN_HALF_WINDOW = 300 // center-300 .. center+300
 const LOAD_CACHE_TTL_MS = 60 * 1000
 const CALIBRATION_TTL_MS = 10 * 60 * 1000
@@ -96,6 +103,9 @@ function padLoadNbr(companyCode, n) {
 // ---------------------------------------------------------------------------
 const loadCache = new Map() // loadNbr -> { at, load }
 const calibration = new Map() // date -> { at, min, max }
+// L1 response memo (in front of Blobs L2, live L3). date -> { at, payload }.
+const fleetMem = new Map()
+const stopsMem = new Map()
 
 function cacheGetLoad(loadNbr) {
   const hit = loadCache.get(loadNbr)
@@ -104,6 +114,15 @@ function cacheGetLoad(loadNbr) {
 }
 function cacheSetLoad(loadNbr, load) {
   loadCache.set(loadNbr, { at: Date.now(), load })
+}
+
+function memGet(map, date) {
+  const hit = map.get(date)
+  if (hit && Date.now() - hit.at < LOAD_CACHE_TTL_MS) return hit.payload
+  return undefined
+}
+function memSet(map, date, payload) {
+  map.set(date, { at: Date.now(), payload })
 }
 
 // ---------------------------------------------------------------------------
@@ -118,11 +137,17 @@ async function httpJson(url, cfg) {
       headers: { accept: 'application/json', authorization: cfg.authHeader },
       signal: controller.signal,
     })
-    if (res.status === 404) return null
-    const text = await res.text()
-    if (!res.ok) {
-      throw new NuvizzError(`NuVizz HTTP ${res.status} for ${url}`, 'UPSTREAM')
+    // Bad credentials must surface LOUDLY so they are obvious to fix.
+    if (res.status === 401 || res.status === 403) {
+      throw new NuvizzError(
+        `NuVizz auth failed (HTTP ${res.status}) — check NUVIZZ_DAVIS_USER / NUVIZZ_DAVIS_PASS`,
+        'CONFIG',
+      )
     }
+    // Everything else (404, 429, any 5xx, etc.) is a SOFT MISS so one transient
+    // or rate-limited probe never aborts the whole scan.
+    if (!res.ok) return null
+    const text = await res.text()
     if (!text) return null
     try {
       return JSON.parse(text)
@@ -130,9 +155,8 @@ async function httpJson(url, cfg) {
       return null
     }
   } catch (err) {
-    if (err.name === 'AbortError') return null // a slow probe is treated as a miss
     if (err instanceof NuvizzError) throw err
-    return null
+    return null // AbortError / timeout / network blip -> miss
   } finally {
     clearTimeout(timer)
   }
@@ -351,36 +375,146 @@ async function discoverLoads(cfg, targetDate) {
 }
 
 // ---------------------------------------------------------------------------
-// Public read API.
+// Cache builders — turn a live scan into the cached payloads.
 // ---------------------------------------------------------------------------
-async function getFleet({ date, env } = {}) {
+function buildSummaries(loads) {
+  return loads
+    .map(normalizeLoadSummary)
+    .sort((a, b) => a.loadNbr.localeCompare(b.loadNbr))
+}
+function buildStops(loads) {
+  return loads.flatMap(normalizeStops).sort(byPlannedEta)
+}
+
+/**
+ * Run the FULL discovery scan once and write both warm-cache payloads. This is
+ * what the scheduled background function (and the manual __refreshFleet trigger)
+ * call so the hot read path never has to scan.
+ */
+async function refreshFleetCache({ date, env } = {}) {
+  const t0 = Date.now()
   const cfg = getConfig(env)
   const targetDate = resolveDate(date)
   const loads = await discoverLoads(cfg, targetDate)
-  // Per-load summaries; per-load stops are stripped from this response.
-  const summaries = loads
-    .map(normalizeLoadSummary)
-    .sort((a, b) => a.loadNbr.localeCompare(b.loadNbr))
-  return { date: targetDate, count: summaries.length, loads: summaries }
+  const summaries = buildSummaries(loads)
+  const stops = buildStops(loads)
+  await cache.writeFleet(targetDate, { loads: summaries })
+  await cache.writeStops(targetDate, { stops })
+  // Freshly warmed — drop any stale L1 memo for this date.
+  fleetMem.delete(targetDate)
+  stopsMem.delete(targetDate)
+  return {
+    date: targetDate,
+    totalLoads: summaries.length,
+    totalStops: stops.length,
+    totalDelivered: summaries.reduce((n, l) => n + (l.stopsDelivered || 0), 0),
+    totalExceptions: summaries.reduce((n, l) => n + (l.stopsExceptions || 0), 0),
+    uniqueDrivers: new Set(summaries.map((l) => l.driverUserName).filter(Boolean)).size,
+    ms: Date.now() - t0,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public read API — CACHE-FIRST: L1 memo -> L2 Blobs -> L3 live scan.
+// ---------------------------------------------------------------------------
+async function getFleet({ date, env } = {}) {
+  const targetDate = resolveDate(date)
+  const l1 = memGet(fleetMem, targetDate)
+  if (l1) return l1
+
+  const hit = await cache.readFleet(targetDate)
+  if (hit && Array.isArray(hit.loads)) {
+    const res = {
+      date: targetDate,
+      count: hit.loads.length,
+      loads: hit.loads,
+      source: 'cache',
+      cachedAt: hit.at ?? null,
+    }
+    memSet(fleetMem, targetDate, res)
+    return res
+  }
+
+  const cfg = getConfig(env)
+  const loads = await discoverLoads(cfg, targetDate)
+  const summaries = buildSummaries(loads)
+  await cache.writeFleet(targetDate, { loads: summaries })
+  return {
+    date: targetDate,
+    count: summaries.length,
+    loads: summaries,
+    source: 'live',
+    cachedAt: null,
+  }
 }
 
 async function getFleetStops({ date, env } = {}) {
-  const cfg = getConfig(env)
   const targetDate = resolveDate(date)
+  const l1 = memGet(stopsMem, targetDate)
+  if (l1) return l1
+
+  const hit = await cache.readStops(targetDate)
+  if (hit && Array.isArray(hit.stops)) {
+    const res = {
+      date: targetDate,
+      count: hit.stops.length,
+      stops: hit.stops,
+      source: 'cache',
+      cachedAt: hit.at ?? null,
+    }
+    memSet(stopsMem, targetDate, res)
+    return res
+  }
+
+  const cfg = getConfig(env)
   const loads = await discoverLoads(cfg, targetDate)
-  const stops = loads.flatMap(normalizeStops).sort(byPlannedEta)
-  return { date: targetDate, count: stops.length, stops }
+  const stops = buildStops(loads)
+  await cache.writeStops(targetDate, { stops })
+  return {
+    date: targetDate,
+    count: stops.length,
+    stops,
+    source: 'live',
+    cachedAt: null,
+  }
 }
 
 async function getDriver({ date, userName, env } = {}) {
-  const cfg = getConfig(env)
   const targetDate = resolveDate(date)
   const wanted = String(userName || '').toLowerCase()
+
+  // Cache-first: filter the warm fleet + stops in-memory, no re-scan.
+  const cachedStops = await cache.readStops(targetDate)
+  const cachedFleet = await cache.readFleet(targetDate)
+  if (
+    cachedStops &&
+    Array.isArray(cachedStops.stops) &&
+    cachedFleet &&
+    Array.isArray(cachedFleet.loads)
+  ) {
+    const loads = cachedFleet.loads.filter(
+      (l) => str(l.driverUserName).toLowerCase() === wanted,
+    )
+    const stops = cachedStops.stops
+      .filter((s) => str(s.driverUserName).toLowerCase() === wanted)
+      .sort(byPlannedEta)
+    return {
+      date: targetDate,
+      userName,
+      count: loads.length,
+      loads,
+      stops,
+      source: 'cache',
+      cachedAt: cachedStops.at ?? cachedFleet.at ?? null,
+    }
+  }
+
+  // MISS -> live path: scan, then re-fetch each matched load live for freshness.
+  const cfg = getConfig(env)
   const loads = await discoverLoads(cfg, targetDate)
   const mine = loads.filter(
     (l) => str(l?.loadAssignment?.driverUserName).toLowerCase() === wanted,
   )
-  // Re-fetch each matched load live so the driver's view is freshest.
   const fresh = []
   for (const l of mine) {
     const loadNbr = str(l?.loadHeader?.loadNbr)
@@ -389,7 +523,15 @@ async function getDriver({ date, userName, env } = {}) {
   }
   const summaries = fresh.map(normalizeLoadSummary)
   const stops = fresh.flatMap(normalizeStops).sort(byPlannedEta)
-  return { date: targetDate, userName, count: summaries.length, loads: summaries, stops }
+  return {
+    date: targetDate,
+    userName,
+    count: summaries.length,
+    loads: summaries,
+    stops,
+    source: 'live',
+    cachedAt: null,
+  }
 }
 
 async function refreshLoad({ loadNbr, env } = {}) {
@@ -409,6 +551,7 @@ module.exports = {
   getFleetStops,
   getDriver,
   refreshLoad,
+  refreshFleetCache,
   NuvizzError,
   // exported for unit reasoning / reuse
   businessDaysBetween,

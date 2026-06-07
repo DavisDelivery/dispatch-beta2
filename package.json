@@ -1,7 +1,7 @@
 {
   "name": "dispatch-beta2",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "Davis Delivery Beta 2 — mobile-first dispatch cockpit (NuVizz read-only).",
   "scripts": {
@@ -11,6 +11,7 @@
     "test": "node --experimental-strip-types --test \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@netlify/blobs": "^10.7.9",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2"
