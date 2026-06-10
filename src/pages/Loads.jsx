@@ -13,13 +13,14 @@ import { buildStopView } from '../lib/stopView.js'
 import { useSortableTable } from '../hooks/useSortableTable.js'
 import SortableTh from '../components/SortableTh.jsx'
 import StopCard from '../components/StopCard.jsx'
+import FreshnessStamp from '../components/FreshnessStamp.jsx'
 
 const PER_PAGE = 25
 
 // Loads — real grid, READ-ONLY (no assign/dispatch/tender controls anywhere).
 export default function Loads() {
   const [params, setParams] = useSearchParams()
-  const [state, setState] = useState({ status: 'loading', loads: [], error: '' })
+  const [state, setState] = useState({ status: 'loading', loads: [], meta: null, error: '' })
   const [search, setSearch] = useState('')
   const statusFilter = params.get('status') || 'All'
   const [page, setPage] = useState(1)
@@ -27,13 +28,19 @@ export default function Loads() {
 
   useEffect(() => {
     let cancelled = false
-    setState({ status: 'loading', loads: [], error: '' })
+    setState({ status: 'loading', loads: [], meta: null, error: '' })
     fetchFleet({ date: 'today' })
-      .then(({ loads }) => {
-        if (!cancelled) setState({ status: 'ready', loads, error: '' })
+      .then((res) => {
+        if (!cancelled)
+          setState({
+            status: 'ready',
+            loads: res.loads,
+            meta: { source: res.source, cachedAt: res.cachedAt, mock: res.mock },
+            error: '',
+          })
       })
       .catch((err) => {
-        if (!cancelled) setState({ status: 'error', loads: [], error: err.message })
+        if (!cancelled) setState({ status: 'error', loads: [], meta: null, error: err.message })
       })
     return () => {
       cancelled = true
@@ -84,7 +91,8 @@ export default function Loads() {
           {state.status === 'ready' ? (
             <>
               <strong>{sortedItems.length}</strong>
-              {sortedItems.length !== views.length && <> (of {views.length})</>} loads · today
+              {sortedItems.length !== views.length && <> (of {views.length})</>} loads ·{' '}
+              <FreshnessStamp meta={state.meta} />
             </>
           ) : (
             <>&nbsp;</>

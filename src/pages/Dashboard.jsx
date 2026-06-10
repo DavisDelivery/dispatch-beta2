@@ -3,22 +3,28 @@ import { Link } from 'react-router-dom'
 import { fetchFleet, fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
 import { buildStopView } from '../lib/stopView.js'
 import { formatUSD } from '../lib/stopView.js'
+import FreshnessStamp from '../components/FreshnessStamp.jsx'
 
 // Dashboard — the day's status pulse + two "Today" tiles. The revenue tile is a
 // lean secondary __fleetstops fetch and must never block the main pulse view.
 export default function Dashboard() {
-  const [fleet, setFleet] = useState({ status: 'loading', loads: [], error: '' })
+  const [fleet, setFleet] = useState({ status: 'loading', loads: [], meta: null, error: '' })
   const [rev, setRev] = useState({ status: 'loading', total: 0, billed: 0 })
-  const [asOf] = useState(() => new Date())
 
   useEffect(() => {
     let cancelled = false
     fetchFleet({ date: 'today' })
-      .then(({ loads }) => {
-        if (!cancelled) setFleet({ status: 'ready', loads, error: '' })
+      .then((res) => {
+        if (!cancelled)
+          setFleet({
+            status: 'ready',
+            loads: res.loads,
+            meta: { source: res.source, cachedAt: res.cachedAt, mock: res.mock },
+            error: '',
+          })
       })
       .catch((err) => {
-        if (!cancelled) setFleet({ status: 'error', loads: [], error: err.message })
+        if (!cancelled) setFleet({ status: 'error', loads: [], meta: null, error: err.message })
       })
     return () => {
       cancelled = true
@@ -61,8 +67,6 @@ export default function Dashboard() {
     return { loads: loads.length, drivers, stops, issues, pct, unassigned }
   }, [fleet.loads])
 
-  const asOfText = asOf.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-
   return (
     <section className="page page--dash">
       <div className="stops__head">
@@ -70,7 +74,9 @@ export default function Dashboard() {
           Dashboard
           {IS_MOCK && <span className="pill pill--mock">Mock data</span>}
         </h1>
-        <p className="stops__count">as of {asOfText} · today</p>
+        <p className="stops__count">
+          {fleet.status === 'ready' ? <FreshnessStamp meta={fleet.meta} /> : <>&nbsp;</>} · today
+        </p>
       </div>
 
       {fleet.status === 'error' && (

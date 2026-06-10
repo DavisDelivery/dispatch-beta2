@@ -5,6 +5,7 @@
 //   path=__fleetstops                     -> flat array of ALL stops for the date (Stops)
 //   path=__driver&userName=X              -> one driver's loads + stops for the date
 //   path=__refreshLoad&loadNbr=DAVIS00... -> single live /load/info refresh
+//   path=__refreshFleet                   -> warm the Blobs cache (scan + write)
 //
 // This is the ONLY HTTP surface. The NuVizz read client lives in ./lib and is
 // shared code (read-only; stateless HTTP Basic; live range-scan, no Firestore).
@@ -16,6 +17,7 @@ const {
   getFleetStops,
   getDriver,
   refreshLoad,
+  refreshFleetCache,
   NuvizzError,
 } = require('./lib/nuvizz.cjs')
 
@@ -46,6 +48,10 @@ exports.handler = async (event) => {
         break
       case '__refreshLoad':
         payload = await refreshLoad({ loadNbr: q.loadNbr })
+        break
+      case '__refreshFleet':
+        // Manual warm / debug: scans + writes the Blobs cache (never NuVizz).
+        payload = await refreshFleetCache({ date })
         break
       default:
         return json(400, { error: `Unknown path "${path}"` })

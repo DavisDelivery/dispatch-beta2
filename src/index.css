@@ -164,6 +164,20 @@ button, input, select { font: inherit; color: inherit; }
 .stops__count { margin: 0 0 0.75rem; color: var(--text-dim); font-size: 0.85rem; }
 .stops__count strong { color: var(--text); }
 
+/* Freshness stamp ("as of 7:05a" + optional warming marker) */
+.freshness { white-space: nowrap; }
+.freshness__warming {
+  margin-left: 0.4rem;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 0.02rem 0.35rem;
+  border-radius: 4px;
+  background: #422006;
+  color: #fbbf24;
+  border: 1px solid #854d0e;
+}
+
 .stops__controls {
   display: flex;
   flex-wrap: wrap;
