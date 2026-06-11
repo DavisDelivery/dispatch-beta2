@@ -1,16 +1,17 @@
 import { StopChips } from './StopChips.jsx'
 import { formatText } from '../lib/format.js'
 
-// One stop, rendered as an intelligence card: chips, appointment reality, soft
-// receiving hours, Non-Uline Rev, plus address/status/ETA. Reused by the Stops
-// page and the Loads detail drawer.
-const BUCKET_CLASS = {
-  Delivered: 'is-delivered',
-  'En Route': 'is-enroute',
-  Exception: 'is-exception',
-  Scheduled: 'is-scheduled',
-  Pending: 'is-pending',
-  Other: 'is-other',
+// One stop, rendered as an intelligence card: a status accent bar, clear
+// name/address hierarchy, Non-Uline Rev, special-instruction chips, and a tidy
+// meta line (status · ETA · appointment reality · soft receiving hours · route).
+// Reused by the Stops page and the Loads detail drawer.
+const BUCKET_SLUG = {
+  Delivered: 'delivered',
+  'En Route': 'enroute',
+  Exception: 'exception',
+  Scheduled: 'scheduled',
+  Pending: 'pending',
+  Other: 'other',
 }
 
 function fmtClock(value) {
@@ -23,9 +24,10 @@ function fmtClock(value) {
 export default function StopCard({ view }) {
   const { stop, parsed, chips, bucket, appt, revenueText, recvText } = view
   const eta = fmtClock(stop.plannedEta)
+  const slug = BUCKET_SLUG[bucket] || 'other'
 
   return (
-    <article className="stopcard">
+    <article className={`stopcard is-${slug}`}>
       <div className="stopcard__top">
         <div className="stopcard__who">
           <h3 className="stopcard__name">{formatText(stop.name)}</h3>
@@ -33,35 +35,47 @@ export default function StopCard({ view }) {
             {[stop.addr1, stop.city, stop.state, stop.zip].filter(Boolean).join(', ')}
           </p>
         </div>
-        <div className="stopcard__rev">
-          {revenueText && (
-            <>
-              <span className="stopcard__rev-amt">{revenueText}</span>
-              <span className="stopcard__rev-lbl">Non-Uline Rev</span>
-            </>
-          )}
-        </div>
+        {revenueText && (
+          <div className="stopcard__rev">
+            <span className="stopcard__rev-amt">{revenueText}</span>
+            <span className="stopcard__rev-lbl">Non-Uline Rev</span>
+          </div>
+        )}
       </div>
 
       <StopChips chips={chips} />
 
       <div className="stopcard__meta">
-        <span className={`statusdot ${BUCKET_CLASS[bucket] || 'is-other'}`}>{bucket}</span>
-        {eta && <span className="stopcard__eta">ETA {eta}</span>}
-        <span className={`stopcard__appt ${appt.placeholder ? 'is-placeholder' : ''}`}>
-          {appt.placeholder ? appt.text : `Appt ${appt.text}`}
+        <span className="stopcard__status">
+          <span className="stopcard__dot" aria-hidden="true" />
+          {bucket}
+        </span>
+        {eta && (
+          <span className="meta-item">
+            <span className="meta-k">ETA</span> {eta}
+          </span>
+        )}
+        <span className={`meta-item ${appt.placeholder ? 'is-muted' : ''}`}>
+          {appt.placeholder ? (
+            appt.text
+          ) : (
+            <>
+              <span className="meta-k">Appt</span> {appt.text}
+            </>
+          )}
         </span>
         {recvText && (
           <span className="stopcard__recv" title="Receiving hours are advisory only">
             {recvText} <span className="soft-mark">soft</span>
           </span>
         )}
-        {stop.loadNbr && <span className="stopcard__load">{stop.routeName || stop.loadNbr}</span>}
-        {stop.driverName && <span className="stopcard__driver">{stop.driverName}</span>}
+        <span className="stopcard__spacer" />
+        {stop.routeName && <span className="meta-item is-dim">{stop.routeName}</span>}
+        {stop.driverName && <span className="meta-item is-dim">{stop.driverName}</span>}
       </div>
 
       {parsed.other.length > 0 && (
-        <p className="stopcard__notes">{parsed.other.join('; ')}</p>
+        <p className="stopcard__notes">{parsed.other.join(' · ')}</p>
       )}
     </article>
   )

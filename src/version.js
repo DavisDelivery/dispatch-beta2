@@ -1,7 +1,7 @@
 // Single source of truth for the app version + build identity rendered in the
 // persistent build badge. Bump APP_VERSION on every functional change (see CLAUDE.md).
 
-export const APP_VERSION = '0.2.1'
+export const APP_VERSION = '0.3.1'
 
 // `__APP_COMMIT__` / `__BUILD_CONTEXT__` are replaced at build time by Vite's
 // `define` (see vite.config.js), sourced from Netlify's COMMIT_REF / CONTEXT.
