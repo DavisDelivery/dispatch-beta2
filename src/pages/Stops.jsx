@@ -23,6 +23,7 @@ export default function Stops() {
   const [statusFilter, setStatusFilter] = useState('All')
   const [chipFilters, setChipFilters] = useState({}) // key -> bool
   const [recvOnly, setRecvOnly] = useState(false)
+  const [filtersOpen, setFiltersOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -86,6 +87,8 @@ export default function Stops() {
 
   const recvCount = useMemo(() => views.filter((v) => v.parsed.receivingHours).length, [views])
 
+  const activeFilterCount = activeChipKeys.length + (recvOnly ? 1 : 0)
+
   function toggleChip(key) {
     setChipFilters((prev) => ({ ...prev, [key]: !prev[key] }))
   }
@@ -125,38 +128,51 @@ export default function Stops() {
         ))}
       </div>
 
-      {/* Per-chip toggle filters + receiving-hours toggle */}
-      <div className="filterbar filterbar--chips">
-        {STOP_CHIPS.map((c) => (
-          <button
-            key={c.key}
-            type="button"
-            className={`filterchip filterchip--chip ${chipFilters[c.key] ? 'is-active' : ''}`}
-            aria-pressed={!!chipFilters[c.key]}
-            style={{ '--chip': c.color }}
-            onClick={() => toggleChip(c.key)}
-          >
-            {c.label} <span className="filterchip__n">{chipCounts[c.key] ?? 0}</span>
-          </button>
-        ))}
+      {/* Tools row: Filters disclosure + sort */}
+      <div className="tools-row">
         <button
           type="button"
-          className={`filterchip ${recvOnly ? 'is-active' : ''}`}
-          aria-pressed={recvOnly}
-          onClick={() => setRecvOnly((v) => !v)}
+          className={`tool-btn ${filtersOpen || activeFilterCount > 0 ? 'is-active' : ''}`}
+          aria-expanded={filtersOpen}
+          onClick={() => setFiltersOpen((v) => !v)}
         >
-          Receiving hrs <span className="filterchip__n">{recvCount}</span>
+          {filtersOpen ? '▾' : '▸'} Filters
+          {activeFilterCount > 0 && <span className="tool-btn__n">{activeFilterCount}</span>}
         </button>
+        <SortPills
+          options={SORT_OPTIONS}
+          sortKey={sortKey}
+          sortDirection={sortDirection}
+          onSort={requestSort}
+        />
       </div>
 
-      <SortPills
-        options={SORT_OPTIONS}
-        sortKey={sortKey}
-        sortDirection={sortDirection}
-        onSort={requestSort}
-      />
-
-      <ChipLegend />
+      {/* Per-chip toggle filters + receiving-hours toggle (collapsed by default) */}
+      {filtersOpen && (
+        <div className="filterpanel">
+          {STOP_CHIPS.map((c) => (
+            <button
+              key={c.key}
+              type="button"
+              className={`filterchip filterchip--chip ${chipFilters[c.key] ? 'is-active' : ''}`}
+              aria-pressed={!!chipFilters[c.key]}
+              style={{ '--chip': c.color }}
+              onClick={() => toggleChip(c.key)}
+            >
+              {c.label} <span className="filterchip__n">{chipCounts[c.key] ?? 0}</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            className={`filterchip ${recvOnly ? 'is-active' : ''}`}
+            aria-pressed={recvOnly}
+            onClick={() => setRecvOnly((v) => !v)}
+          >
+            Receiving hrs <span className="filterchip__n">{recvCount}</span>
+          </button>
+          <ChipLegend />
+        </div>
+      )}
 
       {state.status === 'loading' && <p className="stops__msg">Loading stops…</p>}
       {state.status === 'error' && (
