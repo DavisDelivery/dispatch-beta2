@@ -48,7 +48,10 @@ src/
   hooks/              # useSortableTable, useSelectedDate
   lib/                # format, dateNav (+ tests), parseStopComments(.ts) + tests,
                       #   stopView, loadsModel, workbenchModel, nuvizzApi
-  pages/              # Dashboard, Loads, Stops, Workbench (all built)
+  pages/              # Dashboard, Loads, Stops, Workbench, Driver (all built)
+                      #   Driver (/driver/:userName) — focused single-driver day view:
+                      #     loads + ordered stop sequence via fetchDriver; reachable from
+                      #     the "View day ›" link in each Workbench driver-group header
 netlify/functions/
   nuvizz.cjs          # GET endpoint: ?path=__fleet|__fleetstops|__driver|
                       #   __refreshLoad|__refreshFleet (the only HTTP surface)

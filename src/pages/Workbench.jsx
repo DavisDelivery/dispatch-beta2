@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
 import { buildDriverGroups, matchesGroupSearch } from '../lib/workbenchModel.js'
 import { formatTime, formatNumber, formatDate } from '../lib/format.js'
@@ -23,7 +24,7 @@ const GROUP_SORT_TYPES = {
 }
 
 // A collapsible driver group section.
-function DriverGroup({ group }) {
+function DriverGroup({ group, date, isToday }) {
   const [open, setOpen] = useState(true)
 
   const etaWindow =
@@ -33,53 +34,70 @@ function DriverGroup({ group }) {
         : `${formatTime(group.firstEta)}–${formatTime(group.lastEta)}`
       : null
 
+  // "View day →" link — only for named drivers with a driverUserName.
+  const driverDayHref =
+    !group.isUnassigned && group.driverUserName
+      ? isToday
+        ? `/driver/${group.driverUserName}`
+        : `/driver/${group.driverUserName}?date=${date}`
+      : null
+
   return (
     <section className={`driver-group ${group.isUnassigned ? 'driver-group--unassigned' : ''}`}>
-      {/* Collapsible header */}
-      <button
-        type="button"
-        className="driver-group__hdr"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span className="driver-group__toggle" aria-hidden="true">
-          {open ? '▾' : '▸'}
-        </span>
+      {/* Collapsible header + optional "View day" link side-by-side */}
+      <div className="driver-group__hdr-wrap">
+        <button
+          type="button"
+          className="driver-group__hdr"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span className="driver-group__toggle" aria-hidden="true">
+            {open ? '▾' : '▸'}
+          </span>
 
-        <span className="driver-group__name">
-          {group.driverName}
-          {group.isUnassigned && (
-            <span className="driver-group__badge driver-group__badge--unassigned">Unassigned</span>
-          )}
-        </span>
+          <span className="driver-group__name">
+            {group.driverName}
+            {group.isUnassigned && (
+              <span className="driver-group__badge driver-group__badge--unassigned">Unassigned</span>
+            )}
+          </span>
 
-        <span className="driver-group__meta">
-          <span className="driver-group__stat">
-            {group.loadCount} load{group.loadCount !== 1 ? 's' : ''}
-          </span>
-          <span className="driver-group__stat">
-            {group.delivered}/{group.stopCount} delivered
-          </span>
-          {group.exceptions > 0 && (
-            <span className="driver-group__stat driver-group__stat--exc">
-              {group.exceptions} exc
+          <span className="driver-group__meta">
+            <span className="driver-group__stat">
+              {group.loadCount} load{group.loadCount !== 1 ? 's' : ''}
             </span>
-          )}
-          {group.revenueText && (
-            <span className="driver-group__stat driver-group__stat--rev">
-              {group.revenueText}
+            <span className="driver-group__stat">
+              {group.delivered}/{group.stopCount} delivered
             </span>
-          )}
-          {etaWindow && (
-            <span className="driver-group__stat driver-group__stat--eta">
-              {etaWindow}
+            {group.exceptions > 0 && (
+              <span className="driver-group__stat driver-group__stat--exc">
+                {group.exceptions} exc
+              </span>
+            )}
+            {group.revenueText && (
+              <span className="driver-group__stat driver-group__stat--rev">
+                {group.revenueText}
+              </span>
+            )}
+            {etaWindow && (
+              <span className="driver-group__stat driver-group__stat--eta">
+                {etaWindow}
+              </span>
+            )}
+            <span className="driver-group__stat driver-group__stat--dim">
+              {formatNumber(group.palletTotal)} plt · {formatNumber(group.cartonTotal)} ctn
             </span>
-          )}
-          <span className="driver-group__stat driver-group__stat--dim">
-            {formatNumber(group.palletTotal)} plt · {formatNumber(group.cartonTotal)} ctn
           </span>
-        </span>
-      </button>
+        </button>
+
+        {/* "View day" link — sibling of the button, not nested inside */}
+        {driverDayHref && (
+          <Link to={driverDayHref} className="driver-group__day-link" aria-label={`View ${group.driverName}'s full day`}>
+            View day &#8250;
+          </Link>
+        )}
+      </div>
 
       {/* Expandable stop list */}
       {open && (
@@ -294,7 +312,7 @@ export default function Workbench() {
       {state.status === 'ready' && visibleGroups.length > 0 && (
         <div className="wb-groups">
           {visibleGroups.map((g) => (
-            <DriverGroup key={g.driverUserName || '__unassigned'} group={g} />
+            <DriverGroup key={g.driverUserName || '__unassigned'} group={g} date={date} isToday={isToday} />
           ))}
         </div>
       )}

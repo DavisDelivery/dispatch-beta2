@@ -923,3 +923,158 @@ button, input, select { font: inherit; color: inherit; }
 @media (min-width: 1500px) {
   .page--stops .stoplist { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
+
+/* ---- Workbench: driver group header wrapper (collapse toggle + day link) -- */
+.driver-group__hdr-wrap {
+  display: flex;
+  align-items: stretch;
+}
+
+/* The collapse button now fills remaining width */
+.driver-group__hdr-wrap .driver-group__hdr {
+  flex: 1;
+  min-width: 0;
+}
+
+/* "View day ›" link — sibling of the button, never nested */
+.driver-group__day-link {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0 0.85rem;
+  min-height: var(--tap);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+  border-left: 1px solid var(--line);
+  transition: background 0.1s, color 0.12s;
+}
+.driver-group__day-link:hover {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-elev));
+  color: var(--text);
+}
+
+/* ---- Driver-day page ------------------------------------------------------ */
+.page--driver {}
+
+/* Back link */
+.driver-back {
+  margin-bottom: 0.65rem;
+}
+.driver-back__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: 0.3rem 0.65rem 0.3rem 0.35rem;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: color 0.12s, border-color 0.12s;
+}
+.driver-back__link:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+/* Driver page title */
+.driver__title { margin-bottom: 0.3rem; }
+
+/* Summary stat strip — 2-column grid on mobile, expands on wider screens */
+.driver-summary {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+  margin-bottom: 0.85rem;
+}
+
+.driver-stat {
+  display: flex;
+  flex-direction: column;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--bg-elev);
+}
+
+.driver-stat__value {
+  font-size: 1.3rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.3px;
+  line-height: 1.2;
+}
+.driver-stat__label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-dim);
+  margin-top: 0.15rem;
+}
+
+/* Exception stat uses danger palette */
+.driver-stat--exc {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  border-top-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 5%, var(--bg-elev));
+}
+.driver-stat--exc .driver-stat__value { color: var(--danger); }
+
+/* Revenue stat uses teal */
+.driver-stat--rev {
+  border-top-color: #5eead4;
+}
+.driver-stat--rev .driver-stat__value { color: #5eead4; }
+
+/* ETA window stat uses accent */
+.driver-stat--eta {
+  border-top-color: var(--accent);
+}
+.driver-stat--eta .driver-stat__value { color: var(--accent); }
+
+/* Load pills (route/load summary line above stop list) */
+.driver-loads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.85rem;
+}
+
+.driver-load-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.driver-load-pill__nbr {
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Wider screens: summary strip goes to more columns */
+@media (min-width: 768px) {
+  .driver-summary { grid-template-columns: repeat(3, 1fr); }
+}
+@media (min-width: 1040px) {
+  .driver-summary { grid-template-columns: repeat(5, 1fr); }
+  .page--driver .stoplist { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+}
+@media (min-width: 1500px) {
+  .page--driver .stoplist { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
