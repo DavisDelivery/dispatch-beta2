@@ -7,6 +7,7 @@ import { useSelectedDate } from '../hooks/useSelectedDate.js'
 import StopCard from '../components/StopCard.jsx'
 import FreshnessStamp from '../components/FreshnessStamp.jsx'
 import ExportButton from '../components/ExportButton.jsx'
+import PrintButton from '../components/PrintButton.jsx'
 
 export default function Driver() {
   const { userName } = useParams()
@@ -76,6 +77,24 @@ export default function Driver() {
 
   return (
     <section className="page page--driver">
+      {/* Print-only manifest header — invisible on screen, shown when printing */}
+      <div className="print-only print-header">
+        <div className="print-header__title">Davis Dispatch — Driver Manifest</div>
+        <div className="print-header__meta">
+          <span className="print-header__driver">{state.status === 'ready' ? driverName : userName}</span>
+          <span className="print-header__sep">·</span>
+          <span className="print-header__date">{formatDate(date + 'T12:00:00Z')}</span>
+          {state.status === 'ready' && (
+            <>
+              <span className="print-header__sep">·</span>
+              <span className="print-header__counts">
+                {totalLoads} load{totalLoads !== 1 ? 's' : ''}, {totalStops} stop{totalStops !== 1 ? 's' : ''}
+              </span>
+            </>
+          )}
+        </div>
+      </div>
+
       {/* Back link */}
       <div className="driver-back">
         <Link to={workbenchHref} className="driver-back__link">
@@ -162,6 +181,7 @@ export default function Driver() {
             stops={data?.stops ?? []}
             filename={`driver-${userName}-${date}.csv`}
           />
+          <PrintButton />
         </div>
       )}
 

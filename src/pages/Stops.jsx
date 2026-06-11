@@ -10,6 +10,7 @@ import { ChipLegend } from '../components/StopChips.jsx'
 import SortPills from '../components/SortPills.jsx'
 import FreshnessStamp from '../components/FreshnessStamp.jsx'
 import ExportButton from '../components/ExportButton.jsx'
+import PrintButton from '../components/PrintButton.jsx'
 
 // Stops Intelligence — the keystone. Each stop's comments are parsed into chips,
 // a soft (advisory) receiving window, appointment reality and Non-Uline Rev.
@@ -101,6 +102,22 @@ export default function Stops() {
 
   return (
     <section className="page page--stops">
+      {/* Print-only manifest header — invisible on screen, shown when printing */}
+      <div className="print-only print-header">
+        <div className="print-header__title">Davis Dispatch — Stops Manifest</div>
+        <div className="print-header__meta">
+          <span className="print-header__date">{formatDate(date + 'T12:00:00Z')}</span>
+          {state.status === 'ready' && (
+            <>
+              <span className="print-header__sep">·</span>
+              <span className="print-header__counts">
+                {sortedItems.length}{sortedItems.length !== views.length ? ` of ${views.length}` : ''} stop{sortedItems.length !== 1 ? 's' : ''}
+              </span>
+            </>
+          )}
+        </div>
+      </div>
+
       <div className="stops__head">
         <h1 className="page__title">
           Stops
@@ -155,6 +172,7 @@ export default function Stops() {
           stops={sortedItems.map((v) => v.stop)}
           filename={`stops-${date}.csv`}
         />
+        <PrintButton />
       </div>
 
       {/* Per-chip toggle filters + receiving-hours toggle (collapsed by default) */}
