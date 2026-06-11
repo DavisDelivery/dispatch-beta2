@@ -10,7 +10,9 @@ import {
   buildLoadView,
 } from '../lib/loadsModel.js'
 import { buildStopView } from '../lib/stopView.js'
+import { formatDate } from '../lib/format.js'
 import { useSortableTable } from '../hooks/useSortableTable.js'
+import { useSelectedDate } from '../hooks/useSelectedDate.js'
 import SortableTh from '../components/SortableTh.jsx'
 import StopCard from '../components/StopCard.jsx'
 import FreshnessStamp from '../components/FreshnessStamp.jsx'
@@ -20,8 +22,10 @@ const PER_PAGE = 25
 // Loads — real grid, READ-ONLY (no assign/dispatch/tender controls anywhere).
 export default function Loads() {
   const [params, setParams] = useSearchParams()
+  const { date, isToday } = useSelectedDate()
   const [state, setState] = useState({ status: 'loading', loads: [], meta: null, error: '' })
   const [search, setSearch] = useState('')
+  // Read status from params — preserve alongside ?date.
   const statusFilter = params.get('status') || 'All'
   const [page, setPage] = useState(1)
   const [openLoad, setOpenLoad] = useState(null)
@@ -29,7 +33,7 @@ export default function Loads() {
   useEffect(() => {
     let cancelled = false
     setState({ status: 'loading', loads: [], meta: null, error: '' })
-    fetchFleet({ date: 'today' })
+    fetchFleet({ date })
       .then((res) => {
         if (!cancelled)
           setState({
@@ -45,7 +49,7 @@ export default function Loads() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [date])
 
   const views = useMemo(() => state.loads.map(buildLoadView), [state.loads])
 
@@ -66,19 +70,22 @@ export default function Loads() {
 
   useEffect(() => {
     setPage(1)
-  }, [search, statusFilter])
+  }, [search, statusFilter, date])
 
   const totalPages = Math.max(1, Math.ceil(sortedItems.length / PER_PAGE))
   const currentPage = Math.min(page, totalPages)
   const startIdx = sortedItems.length === 0 ? 0 : (currentPage - 1) * PER_PAGE
   const pageItems = sortedItems.slice(startIdx, startIdx + PER_PAGE)
 
+  // Preserve ?date when changing status filter.
   function setStatus(f) {
     const next = new URLSearchParams(params)
     if (f === 'All') next.delete('status')
     else next.set('status', f)
     setParams(next, { replace: true })
   }
+
+  const dayLabel = isToday ? 'today' : formatDate(date + 'T12:00:00Z')
 
   return (
     <section className="page page--loads">
@@ -91,7 +98,7 @@ export default function Loads() {
           {state.status === 'ready' ? (
             <>
               <strong>{sortedItems.length}</strong>
-              {sortedItems.length !== views.length && <> (of {views.length})</>} loads ·{' '}
+              {sortedItems.length !== views.length && <> (of {views.length})</>} loads · {dayLabel} ·{' '}
               <FreshnessStamp meta={state.meta} />
             </>
           ) : (

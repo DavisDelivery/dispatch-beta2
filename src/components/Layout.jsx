@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import BuildBadge from './BuildBadge.jsx'
+import DateNav from './DateNav.jsx'
 
 // Primary nav — rail order mirrors NuVizz's Transport group.
 // `short` labels keep the bottom bar legible at phone width.
@@ -69,6 +70,8 @@ export default function Layout() {
         </div>
         <BuildBadge />
       </header>
+
+      <DateNav />
 
       <div className="body">
         <nav className="rail" aria-label="Primary navigation">

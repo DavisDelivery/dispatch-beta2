@@ -26,6 +26,15 @@ Operating notes for any agent (or human) working in this repo.
   Never port or add write/assign/dispatch/tender paths in this phase.
 - No NuVizz proprietary assets. Davis branding text + generic icons only.
 
+## Date selector (v0.4.0)
+
+All four pages are driven by a shared `?date=YYYY-MM-DD` URL param. When absent
+or invalid the app defaults to today (clean URL). The `<DateNav>` bar sits
+directly below the topbar and provides ‹ Prev / Next › business-day steppers
+(skipping weekends), a native date picker, and a "Today" button (shown only when
+not on today). The hook is `src/hooks/useSelectedDate.js`; helpers live in
+`src/lib/dateNav.js`. The `?date` param coexists with `?status` on Loads.
+
 ## Layout map
 
 ```
@@ -34,11 +43,11 @@ src/
   App.jsx             # routes
   version.js          # APP_VERSION + build identity (badge)
   index.css           # mobile-first styles (single 768px breakpoint)
-  components/         # Layout, BuildBadge, SortableTh, SortPills, StopChips,
-                      #   StopCard, FreshnessStamp, ComingSoon
-  hooks/              # useSortableTable
-  lib/                # format, parseStopComments(.ts) + tests, stopView,
-                      #   loadsModel, workbenchModel, nuvizzApi (client data access)
+  components/         # Layout, BuildBadge, DateNav, SortableTh, SortPills,
+                      #   StopChips, StopCard, FreshnessStamp, ComingSoon
+  hooks/              # useSortableTable, useSelectedDate
+  lib/                # format, dateNav (+ tests), parseStopComments(.ts) + tests,
+                      #   stopView, loadsModel, workbenchModel, nuvizzApi
   pages/              # Dashboard, Loads, Stops, Workbench (all built)
 netlify/functions/
   nuvizz.cjs          # GET endpoint: ?path=__fleet|__fleetstops|__driver|
