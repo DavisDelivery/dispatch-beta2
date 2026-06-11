@@ -14,6 +14,7 @@ import { formatDate } from '../lib/format.js'
 import { useSortableTable } from '../hooks/useSortableTable.js'
 import { useSelectedDate } from '../hooks/useSelectedDate.js'
 import SortableTh from '../components/SortableTh.jsx'
+import StatusBadge from '../components/StatusBadge.jsx'
 import StopCard from '../components/StopCard.jsx'
 import FreshnessStamp from '../components/FreshnessStamp.jsx'
 
@@ -168,7 +169,9 @@ export default function Loads() {
                   >
                     {LOAD_COLUMNS.map((col) => (
                       <td key={col.key} className={`align-${col.align}`}>
-                        {col.render(row[col.key])}
+                        {col.key === 'bucket'
+                          ? <StatusBadge bucket={row.bucket} />
+                          : col.render(row[col.key])}
                       </td>
                     ))}
                   </tr>
