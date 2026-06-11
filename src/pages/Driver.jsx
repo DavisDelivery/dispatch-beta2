@@ -6,6 +6,7 @@ import { formatDate, formatTime, formatNumber } from '../lib/format.js'
 import { useSelectedDate } from '../hooks/useSelectedDate.js'
 import StopCard from '../components/StopCard.jsx'
 import FreshnessStamp from '../components/FreshnessStamp.jsx'
+import ExportButton from '../components/ExportButton.jsx'
 
 export default function Driver() {
   const { userName } = useParams()
@@ -144,7 +145,7 @@ export default function Driver() {
         </div>
       )}
 
-      {/* Load pills (route names + load numbers) */}
+      {/* Load pills (route names + load numbers) + CSV export */}
       {state.status === 'ready' && loadPills.length > 0 && (
         <div className="driver-loads">
           {loadPills.map((l) => (
@@ -153,6 +154,14 @@ export default function Driver() {
               <span className="driver-load-pill__nbr">#{l.loadNbr}</span>
             </span>
           ))}
+        </div>
+      )}
+      {state.status === 'ready' && (
+        <div className="tools-row">
+          <ExportButton
+            stops={data?.stops ?? []}
+            filename={`driver-${userName}-${date}.csv`}
+          />
         </div>
       )}
 

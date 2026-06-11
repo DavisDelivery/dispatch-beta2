@@ -44,10 +44,12 @@ src/
   version.js          # APP_VERSION + build identity (badge)
   index.css           # mobile-first styles (single 768px breakpoint)
   components/         # Layout, BuildBadge, DateNav, SortableTh, SortPills,
-                      #   StopChips, StopCard, FreshnessStamp, ComingSoon
+                      #   StopChips, StopCard, FreshnessStamp, ComingSoon,
+                      #   ExportButton (CSV download; props: stops, filename)
   hooks/              # useSortableTable, useSelectedDate
   lib/                # format, dateNav (+ tests), parseStopComments(.ts) + tests,
-                      #   stopView, loadsModel, workbenchModel, nuvizzApi
+                      #   stopView, loadsModel, workbenchModel, nuvizzApi,
+                      #   csv (+ tests) — escapeCsvField, toCsv, stopsToCsv, downloadCsv
   pages/              # Dashboard, Loads, Stops, Workbench, Driver (all built)
                       #   Driver (/driver/:userName) — focused single-driver day view:
                       #     loads + ordered stop sequence via fetchDriver; reachable from

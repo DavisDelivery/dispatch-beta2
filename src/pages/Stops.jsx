@@ -9,6 +9,7 @@ import StopCard from '../components/StopCard.jsx'
 import { ChipLegend } from '../components/StopChips.jsx'
 import SortPills from '../components/SortPills.jsx'
 import FreshnessStamp from '../components/FreshnessStamp.jsx'
+import ExportButton from '../components/ExportButton.jsx'
 
 // Stops Intelligence — the keystone. Each stop's comments are parsed into chips,
 // a soft (advisory) receiving window, appointment reality and Non-Uline Rev.
@@ -133,7 +134,7 @@ export default function Stops() {
         ))}
       </div>
 
-      {/* Tools row: Filters disclosure + sort */}
+      {/* Tools row: Filters disclosure + sort + CSV export */}
       <div className="tools-row">
         <button
           type="button"
@@ -149,6 +150,10 @@ export default function Stops() {
           sortKey={sortKey}
           sortDirection={sortDirection}
           onSort={requestSort}
+        />
+        <ExportButton
+          stops={sortedItems.map((v) => v.stop)}
+          filename={`stops-${date}.csv`}
         />
       </div>
 
