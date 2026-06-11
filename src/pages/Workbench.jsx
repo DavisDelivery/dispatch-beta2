@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
 import { buildDriverGroups, matchesGroupSearch } from '../lib/workbenchModel.js'
-import { formatTime, formatNumber } from '../lib/format.js'
+import { formatTime, formatNumber, formatDate } from '../lib/format.js'
 import { useSortableTable } from '../hooks/useSortableTable.js'
+import { useSelectedDate } from '../hooks/useSelectedDate.js'
 import StopCard from '../components/StopCard.jsx'
 import SortPills from '../components/SortPills.jsx'
 import FreshnessStamp from '../components/FreshnessStamp.jsx'
@@ -98,6 +99,7 @@ function DriverGroup({ group }) {
 }
 
 export default function Workbench() {
+  const { date, isToday } = useSelectedDate()
   const [state, setState] = useState({ status: 'loading', groups: [], meta: null, error: '' })
   const [search, setSearch] = useState('')
   const [driverFilter, setDriverFilter] = useState('All') // 'All' | driverUserName | '__unassigned'
@@ -107,7 +109,7 @@ export default function Workbench() {
     let cancelled = false
     setState({ status: 'loading', groups: [], meta: null, error: '' })
 
-    fetchFleetStops({ date: 'today' })
+    fetchFleetStops({ date })
       .then((stopsRes) => {
         if (cancelled) return
         const groups = buildDriverGroups(stopsRes.stops ?? [])
@@ -130,7 +132,7 @@ export default function Workbench() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [date])
 
   // All-group scalar array for useSortableTable.
   const groupRows = useMemo(
@@ -200,7 +202,7 @@ export default function Workbench() {
           {state.status === 'ready' ? (
             <>
               <strong>{totalDrivers}</strong> driver{totalDrivers !== 1 ? 's' : ''} ·{' '}
-              <strong>{totalStops}</strong> stop{totalStops !== 1 ? 's' : ''} ·{' '}
+              <strong>{totalStops}</strong> stop{totalStops !== 1 ? 's' : ''} · {isToday ? 'today' : formatDate(date + 'T12:00:00Z')} ·{' '}
               <FreshnessStamp meta={state.meta} />
             </>
           ) : (

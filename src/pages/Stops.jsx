@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
 import { buildStopView, STATUS_FILTERS, matchesStatusFilter } from '../lib/stopView.js'
 import { STOP_CHIPS } from '../lib/parseStopComments.ts'
+import { formatDate } from '../lib/format.js'
 import { useSortableTable } from '../hooks/useSortableTable.js'
+import { useSelectedDate } from '../hooks/useSelectedDate.js'
 import StopCard from '../components/StopCard.jsx'
 import { ChipLegend } from '../components/StopChips.jsx'
 import SortPills from '../components/SortPills.jsx'
@@ -19,6 +21,7 @@ const SORT_OPTIONS = [
 const SORT_TYPES = { plannedEta: 'date', name: 'text', revenue: 'number', recvStart: 'text' }
 
 export default function Stops() {
+  const { date, isToday } = useSelectedDate()
   const [state, setState] = useState({ status: 'loading', stops: [], meta: null, error: '' })
   const [statusFilter, setStatusFilter] = useState('All')
   const [chipFilters, setChipFilters] = useState({}) // key -> bool
@@ -28,7 +31,7 @@ export default function Stops() {
   useEffect(() => {
     let cancelled = false
     setState({ status: 'loading', stops: [], meta: null, error: '' })
-    fetchFleetStops({ date: 'today' })
+    fetchFleetStops({ date })
       .then((res) => {
         if (!cancelled)
           setState({
@@ -44,7 +47,7 @@ export default function Stops() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [date])
 
   // Parse every stop once.
   const views = useMemo(() => state.stops.map(buildStopView), [state.stops])
@@ -93,6 +96,8 @@ export default function Stops() {
     setChipFilters((prev) => ({ ...prev, [key]: !prev[key] }))
   }
 
+  const dayLabel = isToday ? 'today' : formatDate(date + 'T12:00:00Z')
+
   return (
     <section className="page page--stops">
       <div className="stops__head">
@@ -104,7 +109,7 @@ export default function Stops() {
           {state.status === 'ready' ? (
             <>
               <strong>{sortedItems.length}</strong>
-              {sortedItems.length !== views.length && <> (of {views.length})</>} stops ·{' '}
+              {sortedItems.length !== views.length && <> (of {views.length})</>} stops · {dayLabel} ·{' '}
               <FreshnessStamp meta={state.meta} />
             </>
           ) : (

@@ -3,17 +3,22 @@ import { Link } from 'react-router-dom'
 import { fetchFleet, fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
 import { buildStopView } from '../lib/stopView.js'
 import { formatUSD } from '../lib/stopView.js'
+import { formatDate } from '../lib/format.js'
 import FreshnessStamp from '../components/FreshnessStamp.jsx'
+import { useSelectedDate } from '../hooks/useSelectedDate.js'
 
-// Dashboard — the day's status pulse + two "Today" tiles. The revenue tile is a
-// lean secondary __fleetstops fetch and must never block the main pulse view.
+// Dashboard — the day's status pulse + two tiles for the selected day.
+// The revenue tile is a lean secondary __fleetstops fetch and must never block
+// the main pulse view.
 export default function Dashboard() {
+  const { date, isToday } = useSelectedDate()
   const [fleet, setFleet] = useState({ status: 'loading', loads: [], meta: null, error: '' })
   const [rev, setRev] = useState({ status: 'loading', total: 0, billed: 0 })
 
   useEffect(() => {
     let cancelled = false
-    fetchFleet({ date: 'today' })
+    setFleet({ status: 'loading', loads: [], meta: null, error: '' })
+    fetchFleet({ date })
       .then((res) => {
         if (!cancelled)
           setFleet({
@@ -29,12 +34,13 @@ export default function Dashboard() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [date])
 
   // Secondary, non-blocking revenue fetch.
   useEffect(() => {
     let cancelled = false
-    fetchFleetStops({ date: 'today' })
+    setRev({ status: 'loading', total: 0, billed: 0 })
+    fetchFleetStops({ date })
       .then(({ stops }) => {
         if (cancelled) return
         let total = 0
@@ -54,7 +60,7 @@ export default function Dashboard() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [date])
 
   const pulse = useMemo(() => {
     const loads = fleet.loads
@@ -67,6 +73,15 @@ export default function Dashboard() {
     return { loads: loads.length, drivers, stops, issues, pct, unassigned }
   }, [fleet.loads])
 
+  const dayLabel = isToday ? 'today' : formatDate(date + 'T12:00:00Z')
+
+  // Build a loads URL that preserves the date param when not today.
+  const unassignedLoadsHref = isToday
+    ? '/loads?status=Unassigned'
+    : `/loads?status=Unassigned&date=${date}`
+
+  const stopsHref = isToday ? '/stops' : `/stops?date=${date}`
+
   return (
     <section className="page page--dash">
       <div className="stops__head">
@@ -75,7 +90,7 @@ export default function Dashboard() {
           {IS_MOCK && <span className="pill pill--mock">Mock data</span>}
         </h1>
         <p className="stops__count">
-          {fleet.status === 'ready' ? <FreshnessStamp meta={fleet.meta} /> : <>&nbsp;</>} · today
+          {fleet.status === 'ready' ? <FreshnessStamp meta={fleet.meta} /> : <>&nbsp;</>} · {dayLabel}
         </p>
       </div>
 
@@ -95,19 +110,19 @@ export default function Dashboard() {
         <Stat label="% Complete" value={fleet.status === 'ready' ? `${pulse.pct}%` : '—'} />
       </div>
 
-      <h2 className="dash__h2">Today</h2>
+      <h2 className="dash__h2">{isToday ? 'Today' : dayLabel}</h2>
       <div className="tiles">
-        <Link className="tile" to="/loads?status=Unassigned">
+        <Link className="tile" to={unassignedLoadsHref}>
           <span className="tile__big">{fleet.status === 'ready' ? pulse.unassigned : '—'}</span>
           <span className="tile__label">Unassigned Loads</span>
           <span className="tile__hint">Tap to view unassigned →</span>
         </Link>
 
-        <Link className="tile" to="/stops">
+        <Link className="tile" to={stopsHref}>
           <span className="tile__big">
             {rev.status === 'ready' ? formatUSD(rev.total) : rev.status === 'error' ? '—' : '…'}
           </span>
-          <span className="tile__label">Non-Uline Rev today</span>
+          <span className="tile__label">Non-Uline Rev {dayLabel}</span>
           <span className="tile__hint">
             {rev.status === 'ready' ? `${rev.billed} billed stops →` : 'Calculating…'}
           </span>

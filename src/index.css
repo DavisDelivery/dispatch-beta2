@@ -90,6 +90,98 @@ button, input, select { font: inherit; color: inherit; }
 .build-badge--preview .build-badge__env { color: #fbbf24; }   /* amber */
 .build-badge--dev .build-badge__env { color: var(--text-dim); }
 
+/* ---- DateNav -------------------------------------------------------------- */
+.datenav {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  height: 44px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.datenav__step {
+  flex-shrink: 0;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  height: 100%;
+  padding: 0 0.5rem;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: 1.3rem;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.12s;
+}
+.datenav__step:hover { color: var(--accent); }
+.datenav__step:active { color: var(--accent-strong); }
+
+.datenav__center {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  min-width: 0;
+  height: 100%;
+}
+
+.datenav__label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* Invisible native date input overlaid on the label so tapping it opens the picker. */
+.datenav__input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  /* Must be at least 1px visible to receive events in some browsers */
+  color: transparent;
+}
+
+.datenav__right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: 100%;
+}
+
+.datenav__today {
+  min-height: var(--tap);
+  padding: 0.25rem 0.65rem;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elev));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  border-radius: 7px;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  margin-right: 0.25rem;
+  transition: background 0.12s, color 0.12s;
+}
+.datenav__today:hover {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-elev));
+  color: var(--text);
+}
+
 /* ---- Body + content --------------------------------------------------- */
 .body { flex: 1; display: flex; min-height: 0; }
 
