@@ -38,8 +38,8 @@ src/
                       #   StopCard, FreshnessStamp, ComingSoon
   hooks/              # useSortableTable
   lib/                # format, parseStopComments(.ts) + tests, stopView,
-                      #   loadsModel, nuvizzApi (client data access)
-  pages/              # Dashboard, Loads, Stops (built); Workbench (stub)
+                      #   loadsModel, workbenchModel, nuvizzApi (client data access)
+  pages/              # Dashboard, Loads, Stops, Workbench (all built)
 netlify/functions/
   nuvizz.cjs          # GET endpoint: ?path=__fleet|__fleetstops|__driver|
                       #   __refreshLoad|__refreshFleet (the only HTTP surface)
