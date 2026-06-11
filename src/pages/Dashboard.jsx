@@ -118,7 +118,7 @@ export default function Dashboard() {
           <span className="tile__hint">Tap to view unassigned →</span>
         </Link>
 
-        <Link className="tile" to={stopsHref}>
+        <Link className="tile tile--rev" to={stopsHref}>
           <span className="tile__big">
             {rev.status === 'ready' ? formatUSD(rev.total) : rev.status === 'error' ? '—' : '…'}
           </span>
