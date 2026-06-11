@@ -462,6 +462,9 @@ button, input, select { font: inherit; color: inherit; }
 }
 .tool-btn:hover { color: var(--text); }
 .tool-btn.is-active { color: var(--text); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+/* Export button: larger tap target for mobile (>= 44px) */
+.export-btn { min-height: 44px; }
+.export-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .tool-btn__n {
   font-variant-numeric: tabular-nums;
   font-size: 0.68rem;
