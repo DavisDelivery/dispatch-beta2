@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard.jsx'
 import Workbench from './pages/Workbench.jsx'
 import Loads from './pages/Loads.jsx'
 import Stops from './pages/Stops.jsx'
+import Driver from './pages/Driver.jsx'
 
 export default function App() {
   return (
@@ -13,6 +14,7 @@ export default function App() {
         <Route path="workbench" element={<Workbench />} />
         <Route path="loads" element={<Loads />} />
         <Route path="stops" element={<Stops />} />
+        <Route path="driver/:userName" element={<Driver />} />
         {/* Unknown routes fall back to the Dashboard. */}
         <Route path="*" element={<Dashboard />} />
       </Route>
