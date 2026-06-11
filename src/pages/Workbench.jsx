@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchFleet, fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
-import { buildDriverGroups, matchesGroupSearch, formatUSD } from '../lib/workbenchModel.js'
+import { fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
+import { buildDriverGroups, matchesGroupSearch } from '../lib/workbenchModel.js'
 import { formatTime, formatNumber } from '../lib/format.js'
 import { useSortableTable } from '../hooks/useSortableTable.js'
 import StopCard from '../components/StopCard.jsx'
@@ -22,7 +22,7 @@ const GROUP_SORT_TYPES = {
 }
 
 // A collapsible driver group section.
-function DriverGroup({ group, seq }) {
+function DriverGroup({ group }) {
   const [open, setOpen] = useState(true)
 
   const etaWindow =
@@ -85,7 +85,7 @@ function DriverGroup({ group, seq }) {
         <div className="driver-group__stops stoplist">
           {group.views.map((v, i) => (
             <div key={`${v.stop.loadNbr}-${v.stop.stopNbr}-${i}`} className="wb-stop-wrap">
-              <span className="wb-seq">{seq + i + 1}</span>
+              <span className="wb-seq">{i + 1}</span>
               <div className="wb-stop-card">
                 <StopCard view={v} />
               </div>
@@ -107,8 +107,8 @@ export default function Workbench() {
     let cancelled = false
     setState({ status: 'loading', groups: [], meta: null, error: '' })
 
-    Promise.all([fetchFleet({ date: 'today' }), fetchFleetStops({ date: 'today' })])
-      .then(([_fleet, stopsRes]) => {
+    fetchFleetStops({ date: 'today' })
+      .then((stopsRes) => {
         if (cancelled) return
         const groups = buildDriverGroups(stopsRes.stops ?? [])
         setState({
@@ -291,20 +291,9 @@ export default function Workbench() {
       {/* Driver groups */}
       {state.status === 'ready' && visibleGroups.length > 0 && (
         <div className="wb-groups">
-          {(() => {
-            let seq = 0
-            return visibleGroups.map((g) => {
-              const groupSeq = seq
-              seq += g.views.length
-              return (
-                <DriverGroup
-                  key={g.driverUserName || '__unassigned'}
-                  group={g}
-                  seq={groupSeq}
-                />
-              )
-            })
-          })()}
+          {visibleGroups.map((g) => (
+            <DriverGroup key={g.driverUserName || '__unassigned'} group={g} />
+          ))}
         </div>
       )}
     </section>
