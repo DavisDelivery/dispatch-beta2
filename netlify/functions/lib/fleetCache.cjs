@@ -24,7 +24,21 @@ function record(scope, e) {
 function store() {
   // Lazy require so a missing package / non-Netlify runtime degrades gracefully.
   const { getStore } = require('@netlify/blobs')
-  return getStore('fleet')
+  try {
+    // Automatic configuration (works when the runtime injects NETLIFY_BLOBS_CONTEXT).
+    return getStore('fleet')
+  } catch (e) {
+    // Some function runtimes don't auto-inject the Blobs context
+    // (MissingBlobsEnvironmentError). Fall back to explicit config when a site ID
+    // + token are present in the environment; otherwise re-throw so callers
+    // degrade gracefully to a live scan.
+    const siteID = process.env.NETLIFY_SITE_ID || process.env.SITE_ID
+    const token = process.env.NETLIFY_BLOBS_TOKEN || process.env.NETLIFY_API_TOKEN
+    if (siteID && token) {
+      return getStore({ name: 'fleet', siteID, token })
+    }
+    throw e
+  }
 }
 
 // false if Blobs can't be reached at all (callers may use this to decide).
