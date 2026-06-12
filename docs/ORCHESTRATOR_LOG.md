@@ -128,39 +128,57 @@ This is ground truth — hand it to the agent verbatim whenever NuVizz wiring is
 
 ---
 
-## 7. Progress log (PRs)
+## 7. Progress log (PRs) — all MERGED to `main`
 
-- **PR #1 — v0.1.0 foundation — MERGED.** Routed shell, persistent build badge, sortable tables
-  (`useSortableTable`/`SortableTh`), 4-page nav. NOTE: shipped a *reconstructed/guessed* NuVizz
-  client (it couldn't reach davis-nuvizz); replaced in v0.2.0.
-- **PR #2 — v0.2.0 Stops Intelligence + Dashboard + Loads — MERGED.** Verified NuVizz client
-  (Basic/no-login/range-scan, field maps, plannedEta sort, true-exception rule);
-  `parseStopComments.ts` (pure parser, 20 passing tests); StopChips/StopCard/SortPills; mock
-  fixture; `writeReadyModel()` (read-only); deleted the dead reconstructed files.
-- **PR #3 — v0.2.1 warm cache + scheduled background refresh — DRAFT (pending squash + P4).**
-  `fleetCache.cjs` (graceful Blobs wrapper), `fleet-refresh-background.mjs` (cron `*/5`, weekend
-  skip), cache-first client (L1→L2→L3) with `refreshFleetCache()`, `source`/`cachedAt` tags,
-  `getDriver` in-memory filter on hit, scan hardened (401/403 throw; 404/429/5xx/timeout = soft
-  miss), `SCAN_CONCURRENCY` 50→25, `FreshnessStamp.jsx`, `path=__refreshFleet` manual warm.
+- **#1 v0.1.0** — foundation (routed shell, build badge, sortable tables, 4-page nav).
+- **#2 v0.2.0** — verified NuVizz client + Stops/Dashboard/Loads + `parseStopComments.ts` (parser) + chips/cards.
+- **#3 v0.2.1** — warm cache + scheduled background refresh (cache-first L1→L2→L3).
+- **#4 docs** — this handoff log.
+- **#5 v0.3.0** — Route Workbench (driver-grouped route board).
+- **#6 v0.3.1** — Stops/chips/cards professional UI polish.
+- **#7 v0.4.0** — date selector (`?date`, any business day; `DateNav`).
+- **#8 v0.4.1** — consistency polish (Loads status badges, Dashboard, Workbench headers).
+- **#9 v0.5.0** — Driver-day view (`/driver/:userName` via `__driver`; reached from Workbench "View day").
+- **#10 v0.6.0** — CSV export (Stops + Driver; `csv.js` + tests + `ExportButton`).
+- **#11 v0.6.1** — print manifest (`@media print` + `PrintButton`).
+- **#12 v0.7.0** — Map view (Leaflet + OSM; `/map`; status-colored markers + popups).
+- **#13 v0.7.1** — warm-cache diagnostic (`?path=__cacheDiag`).
+- **#14 v0.7.2** — explicit Netlify Blobs config fallback.
 
-(Discarded: davis-nuvizz PR #56 — v0.2.0 built in the wrong repo; do not merge, should be closed.)
+(Discarded: davis-nuvizz PR #56 — v0.2.0 built in the wrong repo; ignored/closed.)
 
 ---
 
-## 8. Current state / immediate next steps
+## 8. Current state / open items
 
-1. **Squash-merge PR #3** after a phone test of the preview.
-2. **Run the P4 live test:**
-   - Set `NUVIZZ_DAVIS_USER` / `NUVIZZ_DAVIS_PASS` / `NUVIZZ_DAVIS_COMPANY_CODE=DAVIS` /
-     `NUVIZZ_BASE_URL`; set `VITE_USE_MOCK_NUVIZZ=false`; redeploy.
-   - Warm once: hit `/.netlify/functions/nuvizz?path=__refreshFleet&date=<today>` → expect stats.
-   - Open app: `__fleetstops` returns `source:'cache'` in <1s; "as of" stamp populated; chips /
-     Non-Uline Rev / appt windows lit on real data (this also finally confirms the v0.2.0 field map).
-   - Within ~5 min (weekday): Netlify log shows `fleet-refresh {…}`; Blobs holds
-     `fleet:<date>` + `stops:<date>`.
-3. **Watch:** the first request on a cold cache still does a live scan in the request path
-   (~10s limit) — could be slow/time out once, then self-heals; the manual warm sidesteps it.
-   `*/5` cron is tunable to `*/10` if too aggressive once real logs are seen.
+**LIVE.** Production (`dispatch-beta2.netlify.app`) runs on **real NuVizz data**. The site has the
+`NUVIZZ_DAVIS_*` secrets + `VITE_USE_MOCK_NUVIZZ=false`; the verified field map is **confirmed against
+live data** (the old "P4" is done). The app is a **feature-complete READ-ONLY cockpit**: Dashboard,
+Route Workbench, Loads, Stops, Driver-day, Map — plus the shared date selector, CSV export, and print
+manifest.
+
+**OPERATING-MODEL UPDATE (supersedes §4 for the current connector).** In this session the orchestrator
+had **full GitHub write** (open + squash-merge PRs) and **Netlify access** (set env vars, trigger
+deploys) and drove the whole loop itself: spawn agent (isolated git worktree) → review (re-run
+tests/build, read the diff, screenshot via headless Chromium) → squash-merge → repeat. §4's
+"read-only connector" reflects an EARLIER connector — **verify current capabilities per session.**
+
+**OPEN ITEMS (need Chad):**
+1. **Warm-cache token.** Diagnosed via `__cacheDiag`: Netlify isn't auto-injecting
+   `NETLIFY_BLOBS_CONTEXT`, so `getStore('fleet')` throws `MissingBlobsEnvironmentError` and reads
+   fall back to a live scan (masked by the 60s in-instance L1 cache — warm reads are still sub-second;
+   worst case is one ~7s cold scan). Code is ready: `fleetCache.cjs` falls back to explicit
+   `getStore({ name, siteID, token })`, and `NETLIFY_SITE_ID` is already set on the site. **To
+   activate:** add a `NETLIFY_BLOBS_TOKEN` env var (a Netlify PAT — broad scope, a security call), or
+   investigate with Netlify why the auto-context is off (token-free). Then `__cacheDiag` should report
+   `roundTrip: true` and `__fleet` returns `source: 'cache'`.
+2. **NuVizz write-back** — the north star, still **GATED**. Needs Chad's explicit authorization + the
+   agreed guardrails (lowest-blast-radius first, preview-diff, per-write confirm, sandbox-first, undo).
+   The seam is `writeReadyModel()` + the `// TODO(write)` markers in `loadsModel.js`.
+3. **Fuller Route Workbench** (fold in the dispatch-map routing view) — needs davis-nuvizz routing
+   facts from Chad.
+
+**DIAGNOSTIC:** `GET /.netlify/functions/nuvizz?path=__cacheDiag` — read-only Blobs round-trip probe.
 
 ---
 
