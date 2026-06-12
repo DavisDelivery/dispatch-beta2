@@ -17,21 +17,25 @@
 let cacheDisabled = false
 let lastError = null
 
+// TOP-LEVEL import so Netlify's build statically detects Blobs usage and
+// auto-provisions the runtime context. A lazy require() buried inside a function
+// can evade that detection, leaving NETLIFY_BLOBS_CONTEXT un-injected
+// (MissingBlobsEnvironmentError). @netlify/blobs is a declared dependency, so
+// this resolves at runtime.
+const { getStore } = require('@netlify/blobs')
+
 function record(scope, e) {
   lastError = `${scope}: ${e && e.name ? e.name + ' — ' : ''}${e && e.message ? e.message : String(e)}`
 }
 
 function store() {
-  // Lazy require so a missing package / non-Netlify runtime degrades gracefully.
-  const { getStore } = require('@netlify/blobs')
   try {
     // Automatic configuration (works when the runtime injects NETLIFY_BLOBS_CONTEXT).
     return getStore('fleet')
   } catch (e) {
-    // Some function runtimes don't auto-inject the Blobs context
-    // (MissingBlobsEnvironmentError). Fall back to explicit config when a site ID
-    // + token are present in the environment; otherwise re-throw so callers
-    // degrade gracefully to a live scan.
+    // Fallback to explicit config if the runtime still didn't inject the context
+    // and a site ID + token are present; otherwise re-throw so callers degrade
+    // gracefully to a live scan.
     const siteID = process.env.NETLIFY_SITE_ID || process.env.SITE_ID
     const token = process.env.NETLIFY_BLOBS_TOKEN || process.env.NETLIFY_API_TOKEN
     if (siteID && token) {
