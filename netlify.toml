@@ -9,6 +9,20 @@
 [build.environment]
   NODE_VERSION = "20"
 
+# Caching: never cache the HTML entry so a new deploy reaches clients immediately
+# (this is what was leaving phones stuck on an old build). The content-hashed
+# /assets/* are immutable and cached for a year. The /assets rule is listed after
+# the catch-all so it wins for those paths.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    cache-control = "no-store, max-age=0"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    cache-control = "public, max-age=31536000, immutable"
+
 # SPA fallback so react-router client routes resolve on direct hits / refresh.
 # Netlify resolves static assets and /.netlify/functions/* BEFORE this catch-all,
 # so the API function and /test-fixtures/*.json are unaffected.

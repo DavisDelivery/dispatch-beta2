@@ -75,12 +75,14 @@ export default function Dashboard() {
 
   const dayLabel = isToday ? 'today' : formatDate(date + 'T12:00:00Z')
 
-  // Build a loads URL that preserves the date param when not today.
-  const unassignedLoadsHref = isToday
-    ? '/loads?status=Unassigned'
-    : `/loads?status=Unassigned&date=${date}`
+  // Preserve the selected date on every drill-down link.
+  const withDate = (path) => {
+    if (isToday) return path
+    return path.includes('?') ? `${path}&date=${date}` : `${path}?date=${date}`
+  }
 
-  const stopsHref = isToday ? '/stops' : `/stops?date=${date}`
+  const unassignedLoadsHref = withDate('/loads?status=Unassigned')
+  const stopsHref = withDate('/stops')
 
   return (
     <section className="page page--dash">
@@ -99,15 +101,20 @@ export default function Dashboard() {
       )}
 
       <div className="pulse">
-        <Stat label="Loads" value={fleet.status === 'ready' ? pulse.loads : '—'} />
-        <Stat label="Drivers" value={fleet.status === 'ready' ? pulse.drivers : '—'} />
-        <Stat label="Stops" value={fleet.status === 'ready' ? pulse.stops : '—'} />
+        <Stat label="Loads" value={fleet.status === 'ready' ? pulse.loads : '—'} to={withDate('/loads')} />
+        <Stat label="Drivers" value={fleet.status === 'ready' ? pulse.drivers : '—'} to={withDate('/workbench')} />
+        <Stat label="Stops" value={fleet.status === 'ready' ? pulse.stops : '—'} to={withDate('/stops')} />
         <Stat
           label="Issues"
           value={fleet.status === 'ready' ? pulse.issues : '—'}
           tone={pulse.issues > 0 ? 'danger' : undefined}
+          to={withDate('/loads?status=Exceptions')}
         />
-        <Stat label="% Complete" value={fleet.status === 'ready' ? `${pulse.pct}%` : '—'} />
+        <Stat
+          label="% Complete"
+          value={fleet.status === 'ready' ? `${pulse.pct}%` : '—'}
+          to={withDate('/loads?status=Complete')}
+        />
       </div>
 
       <h2 className="dash__h2">{isToday ? 'Today' : dayLabel}</h2>
@@ -132,11 +139,19 @@ export default function Dashboard() {
   )
 }
 
-function Stat({ label, value, tone }) {
-  return (
-    <div className={`stat ${tone === 'danger' ? 'stat--danger' : ''}`}>
+function Stat({ label, value, tone, to }) {
+  const cls = `stat ${tone === 'danger' ? 'stat--danger' : ''} ${to ? 'stat--link' : ''}`
+  const inner = (
+    <>
       <span className="stat__value">{value}</span>
       <span className="stat__label">{label}</span>
-    </div>
+    </>
+  )
+  return to ? (
+    <Link className={cls} to={to}>
+      {inner}
+    </Link>
+  ) : (
+    <div className={cls}>{inner}</div>
   )
 }
