@@ -1083,6 +1083,116 @@ button, input, select { font: inherit; color: inherit; }
 }
 
 /* ===========================================================================
+   MAP PAGE (v0.7.0) — Leaflet/OSM stop map.
+   The Leaflet CSS is imported by Map.jsx; only app-level overrides here.
+   =========================================================================== */
+
+.page--map {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.map__head {
+  flex-shrink: 0;
+  padding-bottom: 0.5rem;
+}
+
+.map__count {
+  margin: 0.15rem 0 0;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+.map__unmapped {
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+
+/* Legend strip — small dots + labels, below the header */
+.map__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.85rem;
+  margin-bottom: 0.65rem;
+  flex-shrink: 0;
+}
+
+.map__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.map__legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.map__legend-label {
+  white-space: nowrap;
+}
+
+/* Map container — explicit height so Leaflet renders */
+.map__container {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 360px;
+  height: calc(100dvh - var(--topbar-h) - 44px - var(--bottom-h) - 112px);
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+/* The actual Leaflet canvas div */
+.map__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 10px;
+}
+
+/* Empty-state overlay */
+.map__empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  z-index: 10;
+  pointer-events: none;
+}
+
+/* Leaflet attribution: smaller, dimmer on dark background */
+.map__canvas .leaflet-control-attribution {
+  font-size: 0.6rem;
+  opacity: 0.7;
+}
+
+/* Popup content — keeps it compact and readable (light popup, dark text is fine) */
+.map-popup { font-size: 0.82rem; line-height: 1.45; min-width: 150px; }
+.map-popup__name { margin-bottom: 0.2rem; }
+.map-popup__addr { color: #555; margin-bottom: 0.2rem; font-size: 0.78rem; }
+.map-popup__row  { color: #444; font-size: 0.78rem; margin-bottom: 0.15rem; }
+.map-popup__status { font-weight: 600; color: #333; font-size: 0.78rem; margin-bottom: 0.1rem; }
+.map-popup__rev  { color: #444; font-size: 0.75rem; margin-top: 0.2rem; }
+
+/* Desktop: the container can grow taller since there's no bottom nav height */
+@media (min-width: 768px) {
+  .map__container {
+    height: calc(100dvh - var(--topbar-h) - 44px - 112px);
+  }
+}
+
+/* ===========================================================================
    PRINT — clean, ink-friendly light manifest.
    All visual changes are scoped here (or to .print-only which is display:none
    on screen). The on-screen dark UI is completely unchanged.
@@ -1132,6 +1242,7 @@ button, input, select { font: inherit; color: inherit; }
   .print-btn,
   .tool-btn,
   .legend,
+  .map__container,
   .no-print { display: none !important; }
 
   /* --- Show print-only header --- */
