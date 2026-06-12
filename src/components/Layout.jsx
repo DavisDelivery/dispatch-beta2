@@ -9,6 +9,7 @@ const NAV = [
   { to: '/workbench', label: 'Route Workbench', short: 'Workbench', icon: 'wrench' },
   { to: '/loads', label: 'Loads', short: 'Loads', icon: 'box' },
   { to: '/stops', label: 'Stops', short: 'Stops', icon: 'pin' },
+  { to: '/map',   label: 'Map',   short: 'Map',   icon: 'map' },
 ]
 
 // Generic stroke icons — NOT NuVizz assets.
@@ -53,6 +54,14 @@ function Icon({ name }) {
         <svg {...common}>
           <path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11z" />
           <circle cx="12" cy="10" r="2.5" />
+        </svg>
+      )
+    case 'map':
+      return (
+        <svg {...common}>
+          <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6" />
+          <line x1="8" y1="2" x2="8" y2="18" />
+          <line x1="16" y1="6" x2="16" y2="22" />
         </svg>
       )
     default:

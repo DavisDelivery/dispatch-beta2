@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard.jsx'
 import Workbench from './pages/Workbench.jsx'
 import Loads from './pages/Loads.jsx'
 import Stops from './pages/Stops.jsx'
+import MapPage from './pages/Map.jsx'
 import Driver from './pages/Driver.jsx'
 
 export default function App() {
@@ -14,6 +15,7 @@ export default function App() {
         <Route path="workbench" element={<Workbench />} />
         <Route path="loads" element={<Loads />} />
         <Route path="stops" element={<Stops />} />
+        <Route path="map" element={<MapPage />} />
         <Route path="driver/:userName" element={<Driver />} />
         {/* Unknown routes fall back to the Dashboard. */}
         <Route path="*" element={<Dashboard />} />
