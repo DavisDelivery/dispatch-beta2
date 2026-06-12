@@ -45,7 +45,8 @@ src/
   index.css           # mobile-first styles (single 768px breakpoint)
   components/         # Layout, BuildBadge, DateNav, SortableTh, SortPills,
                       #   StopChips, StopCard, FreshnessStamp, ComingSoon,
-                      #   ExportButton (CSV download; props: stops, filename)
+                      #   ExportButton (CSV download; props: stops, filename),
+                      #   PrintButton (calls window.print(); no props)
   hooks/              # useSortableTable, useSelectedDate
   lib/                # format, dateNav (+ tests), parseStopComments(.ts) + tests,
                       #   stopView, loadsModel, workbenchModel, nuvizzApi,
@@ -80,6 +81,27 @@ any failure degrades to a live scan, never a crash. Manual warm: `?path=__refres
   `src/lib/nuvizzApi.js`; the function is never called.
 - `VITE_USE_MOCK_NUVIZZ=false` + the `NUVIZZ_*` server vars → live NuVizz data
   via `GET /.netlify/functions/nuvizz?path=…`.
+
+## Print manifest (v0.6.1)
+
+Driver and Stops pages have a **Print** button (`.tool-btn .print-btn`) in the
+`.tools-row` next to the Export CSV button. `window.print()` triggers the browser
+print dialog. A `@media print` block in `src/index.css` produces a clean
+white-background / black-text document:
+
+- Hidden on print: `.topbar, .datenav, .rail, .bottom-nav, .tools-row, .filterbar,
+  .filterpanel, .stops__controls, .build-badge, .pill--mock, .driver-back,
+  .driver-group__day-link, .sortpills, .pager, .export-btn, .tool-btn, .legend`
+  and any `.no-print` element.
+- `.print-only` (display:none on screen) shows a header block with "Davis Dispatch
+  — Driver/Stops Manifest", driver name, date, and counts.
+- `.stopcard` prints as a white bordered block with `break-inside: avoid`;
+  `.chip` elements are outlined labels; `.wb-seq` is a black-bordered circle.
+- `.driver-summary` / `.driver-stat` render as light-bordered stat boxes.
+- On-screen UI is completely unchanged — all print rules are scoped to
+  `@media print {}` or the normally-hidden `.print-only` block.
+
+`PrintButton` lives in `src/components/PrintButton.jsx` (presentational, no props).
 
 ## Comment parser (the keystone)
 

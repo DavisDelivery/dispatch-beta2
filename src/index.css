@@ -1081,3 +1081,203 @@ button, input, select { font: inherit; color: inherit; }
 @media (min-width: 1500px) {
   .page--driver .stoplist { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
+
+/* ===========================================================================
+   PRINT — clean, ink-friendly light manifest.
+   All visual changes are scoped here (or to .print-only which is display:none
+   on screen). The on-screen dark UI is completely unchanged.
+   =========================================================================== */
+
+/* Hide the print-only block on screen */
+.print-only { display: none; }
+
+/* Utility — attach to any element you want hidden when printing */
+.no-print { }
+
+@media print {
+  /* Page margins */
+  @page { margin: 14mm; }
+
+  /* Force light background / dark text throughout */
+  body {
+    background: #fff !important;
+    color: #000 !important;
+    font-size: 11pt;
+  }
+
+  /* Full-width layout — no rail, no bottom padding for nav */
+  .app { display: block; }
+  .body { display: block; }
+  .content {
+    padding: 0 !important;
+    width: 100%;
+  }
+
+  /* --- Hide all interactive / chrome elements --- */
+  .topbar,
+  .datenav,
+  .rail,
+  .bottom-nav,
+  .tools-row,
+  .filterbar,
+  .filterpanel,
+  .stops__controls,
+  .build-badge,
+  .pill--mock,
+  .driver-back,
+  .driver-group__day-link,
+  .sortpills,
+  .pager,
+  .export-btn,
+  .print-btn,
+  .tool-btn,
+  .legend,
+  .no-print { display: none !important; }
+
+  /* --- Show print-only header --- */
+  .print-only { display: block !important; }
+
+  .print-header {
+    margin-bottom: 10mm;
+    padding-bottom: 4mm;
+    border-bottom: 1.5px solid #000;
+  }
+  .print-header__title {
+    font-size: 14pt;
+    font-weight: 700;
+    color: #000;
+    margin: 0 0 2mm;
+  }
+  .print-header__meta {
+    font-size: 10pt;
+    color: #444;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 0.5em;
+    align-items: center;
+  }
+  .print-header__driver { font-weight: 600; color: #000; }
+  .print-header__sep { color: #999; }
+  .print-header__date { color: #333; }
+  .print-header__counts { color: #555; }
+
+  /* --- Page title / count --- */
+  .page__title { color: #000; font-size: 13pt; margin-bottom: 3mm; }
+  .stops__count { color: #555; font-size: 9pt; margin-bottom: 3mm; }
+  .stops__head { margin-bottom: 4mm; }
+
+  /* --- Stop list: single-column, avoid splitting cards --- */
+  .stoplist {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 4mm !important;
+  }
+
+  /* --- Stop card: clean light bordered block --- */
+  .stopcard {
+    background: #fff !important;
+    color: #000 !important;
+    border: 1px solid #999 !important;
+    border-left: 3px solid #999 !important;
+    border-radius: 6px !important;
+    padding: 4mm 5mm !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    box-shadow: none !important;
+  }
+
+  /* Status accent: thin grey for all statuses in print (no dark fills) */
+  .stopcard.is-delivered { border-left-color: #333 !important; }
+  .stopcard.is-enroute   { border-left-color: #555 !important; }
+  .stopcard.is-exception { border-left-color: #111 !important; }
+  .stopcard.is-scheduled { border-left-color: #777 !important; }
+  .stopcard.is-pending   { border-left-color: #aaa !important; }
+  .stopcard.is-other     { border-left-color: #999 !important; }
+
+  .stopcard__name { color: #000 !important; font-size: 10pt; }
+  .stopcard__addr { color: #444 !important; font-size: 8.5pt; }
+  .stopcard__rev-amt { color: #000 !important; font-size: 9pt; }
+  .stopcard__rev-lbl { color: #555 !important; }
+
+  .stopcard__meta { color: #555 !important; font-size: 8pt; }
+  .meta-k { color: #777 !important; }
+  .meta-item { color: #555 !important; }
+  .meta-item.is-dim { color: #777 !important; }
+
+  .stopcard__status { color: #000 !important; }
+  .stopcard__dot {
+    background: #333 !important;
+    box-shadow: none !important;
+  }
+
+  .stopcard__recv { color: #333 !important; }
+  .soft-mark { color: #777 !important; border-color: #bbb !important; }
+
+  .stopcard__notes {
+    color: #555 !important;
+    border-top-color: #ccc !important;
+    font-size: 8pt;
+  }
+
+  /* --- Chips: outlined labels, no dark fills --- */
+  .chip {
+    color: #333 !important;
+    background: transparent !important;
+    border: 1px solid #999 !important;
+    font-size: 7pt !important;
+  }
+
+  /* --- Sequence badge (wb-seq) in driver day view --- */
+  .wb-seq {
+    background: transparent !important;
+    border: 1px solid #333 !important;
+    color: #000 !important;
+    font-size: 7pt !important;
+  }
+  .wb-stop-wrap { break-inside: avoid; page-break-inside: avoid; }
+
+  /* --- Driver summary strip: light bordered stat boxes --- */
+  .driver-summary {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 3mm !important;
+    margin-bottom: 5mm !important;
+    grid-template-columns: unset !important;
+  }
+  .driver-stat {
+    background: #fff !important;
+    border: 1px solid #aaa !important;
+    border-top: 2px solid #555 !important;
+    border-radius: 5px !important;
+    padding: 2mm 4mm !important;
+    min-width: 22mm;
+  }
+  .driver-stat__value { color: #000 !important; font-size: 11pt !important; }
+  .driver-stat__label { color: #555 !important; font-size: 7pt !important; }
+  .driver-stat--exc { border-color: #555 !important; border-top-color: #000 !important; }
+  .driver-stat--exc .driver-stat__value { color: #000 !important; }
+  .driver-stat--rev .driver-stat__value { color: #000 !important; }
+  .driver-stat--rev { border-top-color: #333 !important; }
+  .driver-stat--eta .driver-stat__value { color: #000 !important; }
+  .driver-stat--eta { border-top-color: #555 !important; }
+
+  /* --- Load pills (driver page route summary) --- */
+  .driver-loads { margin-bottom: 4mm !important; }
+  .driver-load-pill {
+    background: transparent !important;
+    border-color: #aaa !important;
+    color: #000 !important;
+    font-size: 8pt !important;
+  }
+  .driver-load-pill__nbr { color: #555 !important; }
+
+  /* --- Freshness stamp --- */
+  .freshness { color: #555 !important; }
+  .freshness__warming { display: none !important; }
+
+  /* Headings */
+  h1, h2, h3 { color: #000 !important; }
+
+  /* Suppress any outline/focus rings */
+  * { outline: none !important; box-shadow: none !important; }
+}
