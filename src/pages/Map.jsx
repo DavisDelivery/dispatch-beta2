@@ -9,6 +9,7 @@ import { formatDate, formatTime } from '../lib/format.js'
 import { useSelectedDate } from '../hooks/useSelectedDate.js'
 import FreshnessStamp from '../components/FreshnessStamp.jsx'
 import { loadGoogleMaps } from '../lib/googleMaps.js'
+import { MarkerClusterer } from '@googlemaps/markerclusterer'
 
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || ''
 
@@ -92,6 +93,7 @@ export default function MapPage() {
   const mapRef = useRef(null)
   const markersRef = useRef([])
   const infoRef = useRef(null)
+  const clustererRef = useRef(null)
 
   // ---- Load the Google Maps script once ----
   useEffect(() => {
@@ -123,10 +125,14 @@ export default function MapPage() {
     })
     map.getStreetView().setOptions({ enableCloseButton: true })
     infoRef.current = new api.InfoWindow()
+    // Cluster dense markers; clusters expand as you zoom (handles 600+ stops).
+    clustererRef.current = new MarkerClusterer({ map })
     mapRef.current = map
     return () => {
       // No explicit destroy for google.maps.Map; drop refs so a remount re-creates.
+      if (clustererRef.current) clustererRef.current.clearMarkers()
       markersRef.current = []
+      clustererRef.current = null
       mapRef.current = null
       infoRef.current = null
     }
@@ -179,7 +185,8 @@ export default function MapPage() {
   useEffect(() => {
     const map = mapRef.current
     const api = maps.api
-    if (!map || !api) return
+    const clusterer = clustererRef.current
+    if (!map || !api || !clusterer) return
 
     // Open Street View at a position (the map's embedded panorama).
     const openStreetView = (lat, lng) => {
@@ -189,18 +196,18 @@ export default function MapPage() {
       pano.setVisible(true)
     }
 
-    // Clear old markers.
-    for (const m of markersRef.current) m.setMap(null)
-    markersRef.current = []
+    // Clear old markers from the clusterer.
+    clusterer.clearMarkers()
 
+    const markers = []
     const bounds = new api.LatLngBounds()
     for (const view of filteredViews) {
       const { stop } = view
       const pos = { lat: stop.latitude, lng: stop.longitude }
       const color = markerColor(stop)
+      // No `map` here — the clusterer adds/removes markers from the map.
       const marker = new api.Marker({
         position: pos,
-        map,
         title: stop.name || '',
         icon: {
           path: api.SymbolPath.CIRCLE,
@@ -215,9 +222,11 @@ export default function MapPage() {
         infoRef.current.setContent(popupNode(view, openStreetView))
         infoRef.current.open({ map, anchor: marker })
       })
-      markersRef.current.push(marker)
+      markers.push(marker)
       bounds.extend(pos)
     }
+    clusterer.addMarkers(markers)
+    markersRef.current = markers
 
     if (filteredViews.length === 1) {
       map.setCenter(bounds.getCenter())
