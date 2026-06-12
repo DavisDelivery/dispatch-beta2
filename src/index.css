@@ -1221,11 +1221,31 @@ button, input, select { font: inherit; color: inherit; }
   pointer-events: none;
 }
 
-/* Leaflet attribution: smaller, dimmer on dark background */
-.map__canvas .leaflet-control-attribution {
-  font-size: 0.6rem;
-  opacity: 0.7;
+/* The empty-state must not block the map; only the message text is shown. */
+.map__empty code { font-family: monospace; }
+
+/* Google Maps InfoWindow content (renders in Google's light popup) */
+.gm-popup { min-width: 180px; max-width: 240px; color: #1f2937; font-size: 0.82rem; line-height: 1.35; }
+.gm-popup__name { font-weight: 700; font-size: 0.9rem; }
+.gm-popup__addr { color: #4b5563; margin-top: 0.1rem; }
+.gm-popup__row { margin-top: 0.2rem; }
+.gm-popup__status { margin-top: 0.2rem; font-weight: 600; }
+.gm-popup__rev { margin-top: 0.15rem; color: #047857; }
+.gm-popup__sv {
+  margin-top: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.32rem 0.6rem;
+  background: #1d4ed8;
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
 }
+.gm-popup__sv:hover { background: #1e40af; }
 
 /* Popup content — keeps it compact and readable (light popup, dark text is fine) */
 .map-popup { font-size: 0.82rem; line-height: 1.45; min-width: 150px; }
