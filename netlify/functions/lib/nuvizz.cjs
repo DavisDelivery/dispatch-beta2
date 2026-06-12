@@ -545,6 +545,14 @@ async function refreshLoad({ loadNbr, env } = {}) {
   }
 }
 
+// Read-only Blobs diagnostic (no NuVizz call). Surfaces why the warm cache is or
+// isn't working in production via ?path=__cacheDiag.
+async function cacheDiagnose({ date } = {}) {
+  const targetDate = resolveDate(date)
+  const diag = await cache.diagnose(targetDate)
+  return { date: targetDate, ...diag, lastError: cache.getLastError() }
+}
+
 module.exports = {
   getConfig,
   getFleet,
@@ -552,6 +560,7 @@ module.exports = {
   getDriver,
   refreshLoad,
   refreshFleetCache,
+  cacheDiagnose,
   NuvizzError,
   // exported for unit reasoning / reuse
   businessDaysBetween,
