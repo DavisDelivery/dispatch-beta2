@@ -204,11 +204,11 @@ export default function MapPage() {
         title: stop.name || '',
         icon: {
           path: api.SymbolPath.CIRCLE,
-          scale: 8,
+          scale: 5,
           fillColor: color,
-          fillOpacity: 0.92,
+          fillOpacity: 0.9,
           strokeColor: '#0b1220',
-          strokeWeight: 1.5,
+          strokeWeight: 1,
         },
       })
       marker.addListener('click', () => {
