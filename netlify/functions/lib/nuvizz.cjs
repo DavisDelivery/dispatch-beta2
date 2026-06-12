@@ -29,7 +29,10 @@ const REQUIRED_VARS = ['NUVIZZ_DAVIS_USER', 'NUVIZZ_DAVIS_PASS']
 const DEFAULT_BASE_URL = 'https://portal.nuvizz.com/deliverit/openapi/v7'
 const DEFAULT_TIMEOUT_MS = 12000
 // Gentler now that scans are off the hot path (background-warmed).
-const SCAN_CONCURRENCY = 25
+// Higher concurrency because the Blobs warm cache is unavailable on this site,
+// so the scan currently runs ON the request path and must finish under the
+// function timeout. (Drop back toward ~25 once the warm cache is active.)
+const SCAN_CONCURRENCY = 50
 const SCAN_HALF_WINDOW = 300 // center-300 .. center+300
 const LOAD_CACHE_TTL_MS = 60 * 1000
 const CALIBRATION_TTL_MS = 10 * 60 * 1000
