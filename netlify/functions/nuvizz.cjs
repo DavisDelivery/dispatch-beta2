@@ -18,6 +18,7 @@ const {
   getDriver,
   refreshLoad,
   refreshFleetCache,
+  cacheDiagnose,
   NuvizzError,
 } = require('./lib/nuvizz.cjs')
 
@@ -52,6 +53,10 @@ exports.handler = async (event) => {
       case '__refreshFleet':
         // Manual warm / debug: scans + writes the Blobs cache (never NuVizz).
         payload = await refreshFleetCache({ date })
+        break
+      case '__cacheDiag':
+        // Read-only Blobs round-trip diagnostic (never calls NuVizz).
+        payload = await cacheDiagnose({ date })
         break
       default:
         return json(400, { error: `Unknown path "${path}"` })
