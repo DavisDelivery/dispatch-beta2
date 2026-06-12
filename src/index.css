@@ -1083,7 +1083,7 @@ button, input, select { font: inherit; color: inherit; }
 }
 
 /* ===========================================================================
-   MAP PAGE (v0.7.0) — Leaflet/OSM stop map.
+   MAP PAGE (v0.8.0) — Leaflet/OSM stop map with status + driver filters.
    The Leaflet CSS is imported by Map.jsx; only app-level overrides here.
    =========================================================================== */
 
@@ -1104,17 +1104,64 @@ button, input, select { font: inherit; color: inherit; }
   color: var(--text-dim);
 }
 
+/* Prominent day label in the count line */
+.map__day {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.map__count-sep {
+  color: var(--text-dim);
+}
+
+.map__filter-note {
+  color: var(--accent);
+  font-size: 0.78rem;
+}
+
 .map__unmapped {
   color: var(--text-dim);
   opacity: 0.7;
 }
 
-/* Legend strip — small dots + labels, below the header */
+/* Status filterbar — flex-shrink: 0 keeps it above the map */
+.map__filterbar {
+  flex-shrink: 0;
+}
+
+/* Driver filter row — label + select, sits between status bar and legend */
+.map__driver-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.6rem;
+  flex-shrink: 0;
+}
+
+.map__driver-label {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Driver select inherits .control--select sizing; override to fill available space */
+.map__driver-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.map__driver-select select {
+  width: 100%;
+  min-height: var(--tap);
+}
+
+/* Legend strip — small dots + labels, below the driver filter */
 .map__legend {
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem 0.85rem;
-  margin-bottom: 0.65rem;
+  margin-bottom: 0.55rem;
   flex-shrink: 0;
 }
 
@@ -1137,12 +1184,15 @@ button, input, select { font: inherit; color: inherit; }
   white-space: nowrap;
 }
 
-/* Map container — explicit height so Leaflet renders */
+/* Map container — explicit height so Leaflet renders correctly.
+   Offset accounts for: topbar (52px) + datenav (44px) + bottom-nav (60px mobile)
+   + page header ~65px + filterbar ~44px + driver row ~55px + legend ~36px = ~220px content.
+   The flex:1 1 auto + min-height:320px are the real guards; the height is a hint. */
 .map__container {
   position: relative;
   flex: 1 1 auto;
-  min-height: 360px;
-  height: calc(100dvh - var(--topbar-h) - 44px - var(--bottom-h) - 112px);
+  min-height: 320px;
+  height: calc(100dvh - var(--topbar-h) - 44px - var(--bottom-h) - 220px);
   width: 100%;
   border-radius: 10px;
   border: 1px solid var(--line);
@@ -1185,10 +1235,10 @@ button, input, select { font: inherit; color: inherit; }
 .map-popup__status { font-weight: 600; color: #333; font-size: 0.78rem; margin-bottom: 0.1rem; }
 .map-popup__rev  { color: #444; font-size: 0.75rem; margin-top: 0.2rem; }
 
-/* Desktop: the container can grow taller since there's no bottom nav height */
+/* Desktop: no bottom nav, so less offset needed */
 @media (min-width: 768px) {
   .map__container {
-    height: calc(100dvh - var(--topbar-h) - 44px - 112px);
+    height: calc(100dvh - var(--topbar-h) - 44px - 220px);
   }
 }
 

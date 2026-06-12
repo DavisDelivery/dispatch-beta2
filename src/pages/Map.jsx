@@ -2,12 +2,12 @@
 // Uses the imperative Leaflet API directly (no react-leaflet).
 // Read-only; no write paths.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 
 import { fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
-import { buildStopView, statusBucket } from '../lib/stopView.js'
+import { buildStopView, statusBucket, STATUS_FILTERS, matchesStatusFilter } from '../lib/stopView.js'
 import { formatDate, formatTime } from '../lib/format.js'
 import { useSelectedDate } from '../hooks/useSelectedDate.js'
 import FreshnessStamp from '../components/FreshnessStamp.jsx'
@@ -29,6 +29,14 @@ const LEGEND_ENTRIES = [
   { bucket: 'Scheduled', color: STATUS_COLORS.Scheduled },
   { bucket: 'Pending',   color: STATUS_COLORS.Pending },
 ]
+
+// Short weekday names indexed by getUTCDay() (0=Sun…6=Sat).
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+function weekdayFull(iso) {
+  const d = new Date(iso + 'T12:00:00Z')
+  return WEEKDAYS[d.getUTCDay()]
+}
 
 function markerColor(stop) {
   const bucket = statusBucket(stop)
@@ -54,19 +62,44 @@ function popupHtml(view) {
   `.trim()
 }
 
+// Build a sorted list of distinct drivers from mapped stop views.
+function buildDriverList(views) {
+  const seen = new Map() // userName -> driverName
+  for (const { stop } of views) {
+    if (
+      typeof stop.latitude  === 'number' &&
+      typeof stop.longitude === 'number' &&
+      stop.driverUserName
+    ) {
+      if (!seen.has(stop.driverUserName)) {
+        seen.set(stop.driverUserName, stop.driverName || stop.driverUserName)
+      }
+    }
+  }
+  return Array.from(seen.entries())
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+}
+
 export default function MapPage() {
-  const { date, isToday } = useSelectedDate()
+  const { date } = useSelectedDate()
   const [state, setState] = useState({ status: 'loading', stops: [], meta: null, error: '' })
+
+  // ---- Filter state ----
+  const [statusFilter, setStatusFilter] = useState('All')
+  const [driverFilter, setDriverFilter] = useState('All') // driverUserName or 'All'
 
   // Refs to hold the Leaflet map instance and the marker layer group.
   const mapRef     = useRef(null)  // holds the L.Map instance
   const mapElRef   = useRef(null)  // DOM node for the map container
   const markersRef = useRef(null)  // L.LayerGroup for the markers
 
-  // ---- Data fetch — re-runs when date changes ----
+  // ---- Data fetch — re-runs when date changes; reset filters on new date ----
   useEffect(() => {
     let cancelled = false
     setState({ status: 'loading', stops: [], meta: null, error: '' })
+    setStatusFilter('All')
+    setDriverFilter('All')
     fetchFleetStops({ date })
       .then((res) => {
         if (!cancelled)
@@ -121,7 +154,45 @@ export default function MapPage() {
     }
   }, []) // intentionally empty: init once, cleanup on unmount
 
-  // ---- Marker layer — re-runs when stops data changes ----
+  // ---- Derived data: all views + mapped views ----
+  const allViews = useMemo(
+    () => (state.status === 'ready' ? state.stops.map(buildStopView) : []),
+    [state.stops, state.status],
+  )
+
+  const mappedViews = useMemo(
+    () =>
+      allViews.filter(({ stop }) => {
+        return typeof stop.latitude === 'number' && typeof stop.longitude === 'number'
+      }),
+    [allViews],
+  )
+
+  // ---- Driver list derived from mapped stops ----
+  const driverList = useMemo(() => buildDriverList(allViews), [allViews])
+
+  // ---- Status counts for the filterbar (based on mapped stops only) ----
+  const statusCounts = useMemo(() => {
+    const counts = {}
+    for (const f of STATUS_FILTERS) {
+      counts[f] = mappedViews.filter((v) => matchesStatusFilter(v, f)).length
+    }
+    return counts
+  }, [mappedViews])
+
+  // ---- Apply both filters to get the set of views to show on the map ----
+  const filteredViews = useMemo(
+    () =>
+      mappedViews.filter((v) => {
+        if (!matchesStatusFilter(v, statusFilter)) return false
+        if (driverFilter !== 'All' && v.stop.driverUserName !== driverFilter) return false
+        return true
+      }),
+    [mappedViews, statusFilter, driverFilter],
+  )
+
+  // ---- Marker layer — re-runs when filtered views change ----
+  // Does NOT reinitialize the map — only clears and rebuilds the marker layer.
   useEffect(() => {
     const map = mapRef.current
     const layer = markersRef.current
@@ -130,14 +201,13 @@ export default function MapPage() {
     // Clear previous markers.
     layer.clearLayers()
 
-    const views = state.stops.map(buildStopView)
     const points = []
 
-    for (const view of views) {
+    for (const view of filteredViews) {
       const { stop } = view
-      const lat = typeof stop.latitude  === 'number' ? stop.latitude  : null
-      const lng = typeof stop.longitude === 'number' ? stop.longitude : null
-      if (lat === null || lng === null) continue
+      // filteredViews are already guaranteed to have lat/lng from mappedViews
+      const lat = stop.latitude
+      const lng = stop.longitude
 
       const color = markerColor(stop)
       const marker = L.circleMarker([lat, lng], {
@@ -155,24 +225,21 @@ export default function MapPage() {
 
     if (points.length > 0) {
       map.fitBounds(L.latLngBounds(points), { padding: [30, 30], maxZoom: 13 })
-    } else {
-      // No valid points — show the NC default view.
-      map.setView([35.5, -80.0], 8)
     }
+    // If zero visible, keep current view (no-match note is shown in JSX).
 
-    // Ensure size is correct after data update.
+    // Ensure size is correct after filter update.
     map.invalidateSize()
-  }, [state.stops])
+  }, [filteredViews])
 
-  // ---- Derived counts ----
-  const views        = state.status === 'ready' ? state.stops.map(buildStopView) : []
-  const mappedCount  = views.filter((v) => {
-    const s = v.stop
-    return typeof s.latitude === 'number' && typeof s.longitude === 'number'
-  }).length
-  const unmappedCount = views.length - mappedCount
+  // ---- Derived counts for the header ----
+  const mappedCount   = mappedViews.length
+  const unmappedCount = allViews.length - mappedCount
+  const visibleCount  = filteredViews.length
+  const isFiltered    = statusFilter !== 'All' || driverFilter !== 'All'
 
-  const dayLabel = isToday ? 'today' : formatDate(date + 'T12:00:00Z')
+  // Day header: always shows full weekday + date so users know exactly which day is shown.
+  const fullDayLabel = `${weekdayFull(date)}, ${formatDate(date + 'T12:00:00Z')}`
 
   return (
     <section className="page page--map">
@@ -183,7 +250,16 @@ export default function MapPage() {
         </h1>
         {state.status === 'ready' && (
           <p className="map__count">
-            <strong>{mappedCount}</strong> mapped · {dayLabel} · <FreshnessStamp meta={state.meta} />
+            <strong className="map__day">{fullDayLabel}</strong>
+            <span className="map__count-sep"> · </span>
+            <strong>{visibleCount}</strong>
+            {isFiltered && visibleCount !== mappedCount && <> of {mappedCount}</>}
+            {' mapped'}
+            {isFiltered && (
+              <span className="map__filter-note"> (filtered)</span>
+            )}
+            <span className="map__count-sep"> · </span>
+            <FreshnessStamp meta={state.meta} />
             {unmappedCount > 0 && (
               <span className="map__unmapped"> ({unmappedCount} without coordinates)</span>
             )}
@@ -195,7 +271,44 @@ export default function MapPage() {
         )}
       </div>
 
-      {/* Status legend */}
+      {/* Status filter chips — reuse the same .filterbar / .filterchip pattern as Stops */}
+      {state.status === 'ready' && (
+        <div className="filterbar map__filterbar">
+          {STATUS_FILTERS.map((f) => (
+            <button
+              key={f}
+              type="button"
+              className={`filterchip ${statusFilter === f ? 'is-active' : ''}`}
+              aria-pressed={statusFilter === f}
+              onClick={() => setStatusFilter(f)}
+            >
+              {f} <span className="filterchip__n">{statusCounts[f] ?? 0}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Driver filter — compact select, only shown when there are drivers to pick from */}
+      {state.status === 'ready' && driverList.length > 0 && (
+        <div className="map__driver-row">
+          <span className="map__driver-label">Driver</span>
+          <div className="control control--select map__driver-select">
+            <select
+              id="map-driver-filter"
+              value={driverFilter}
+              onChange={(e) => setDriverFilter(e.target.value)}
+              aria-label="Filter by driver"
+            >
+              <option value="All">All drivers ({driverList.length})</option>
+              {driverList.map(({ value, label }) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {/* Legend + no-match note */}
       <div className="map__legend">
         {LEGEND_ENTRIES.map(({ bucket, color }) => (
           <span key={bucket} className="map__legend-item">
@@ -209,6 +322,9 @@ export default function MapPage() {
       <div className="map__container">
         {state.status === 'ready' && mappedCount === 0 && (
           <div className="map__empty">No stops with coordinates for this day.</div>
+        )}
+        {state.status === 'ready' && mappedCount > 0 && visibleCount === 0 && (
+          <div className="map__empty">No stops match the current filters.</div>
         )}
         <div ref={mapElRef} className="map__canvas" aria-label="Stop locations map" />
       </div>

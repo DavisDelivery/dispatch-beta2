@@ -85,19 +85,31 @@ any failure degrades to a live scan, never a crash. Manual warm: `?path=__refres
 - `VITE_USE_MOCK_NUVIZZ=false` + the `NUVIZZ_*` server vars → live NuVizz data
   via `GET /.netlify/functions/nuvizz?path=…`.
 
-## Map page (v0.7.0)
+## Map page (v0.8.0)
 
 `/map` — Leaflet 1.9.4 (imperative API, no react-leaflet) with OpenStreetMap tiles.
 - `L.circleMarker` per stop with valid `latitude`/`longitude`; colored by status bucket
   (same hex palette as the stopcard status CSS).
-- `map.fitBounds()` frames all markers; popups show name, address, ETA (12h), appt, status,
-  and Non-Uline Rev (via `buildStopView`).
+- `map.fitBounds()` re-fits to the **currently visible (filtered)** markers whenever
+  filters change; if zero markers visible a "no stops match" overlay is shown.
+- Popups show name, address, ETA (12h), appt, status, and Non-Uline Rev (via `buildStopView`).
+- **Status filters** (v0.8.0): a `.filterbar` of `.filterchip`s using the same
+  `STATUS_FILTERS` + `matchesStatusFilter` from `stopView.js` as the Stops page.
+  Each chip shows a live count of *mapped* stops in that bucket. Default 'All'.
+- **Driver filter** (v0.8.0): a compact `<select>` listing "All drivers" + each
+  distinct `driverUserName` present that day. Status + driver filters are ANDed.
+  The select only renders when there are drivers with mapped stops.
+- **Day selection** (v0.8.0): the header count line shows the full weekday + date
+  prominently ("Monday, Jun 16, 2025") so it is unmistakable which day is displayed.
+  The global `<DateNav>` bar remains the control for stepping/picking dates.
 - Tile source: `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`
   (OSM tiles only — no NuVizz or proprietary map assets).
 - Leaflet CSS is imported in `Map.jsx` (not `index.css`) so Vite bundles it correctly.
 - React 18 StrictMode guard: the map instance is held in a `useRef`; a second init call
   is a no-op; `map.remove()` + null on unmount.
 - Mock mode: all 11 fixture stops have lat/lng, so the map renders without credentials.
+- Map container height calc updated for the two new filter rows (`.map__container`
+  mobile offset 220px, desktop offset 220px minus bottom-nav height).
 
 ## Print manifest (v0.6.1)
 
