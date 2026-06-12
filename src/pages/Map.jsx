@@ -81,11 +81,20 @@ function buildDriverList(views) {
     .sort((a, b) => a.label.localeCompare(b.label))
 }
 
+// Comment-derived flag filters — mirrors NuVizz's map filter panel.
+const FLAG_FILTERS = [
+  { key: 'appt', label: 'Appt required', test: (v) => !v.appt.placeholder },
+  { key: 'liftgate', label: 'Liftgate', test: (v) => v.parsed.liftgate },
+  { key: 'restriction', label: 'Has restriction', test: (v) => v.chips.length > 0 },
+  { key: 'unflagged', label: 'Unflagged', test: (v) => v.chips.length === 0 },
+]
+
 export default function MapPage() {
   const { date } = useSelectedDate()
   const [state, setState] = useState({ status: 'loading', stops: [], meta: null, error: '' })
   const [statusFilter, setStatusFilter] = useState('All')
   const [driverFilter, setDriverFilter] = useState('All')
+  const [flagFilters, setFlagFilters] = useState({}) // key -> bool
   // 'loading' | 'ready' | 'error' for the Google Maps script itself.
   const [maps, setMaps] = useState({ status: API_KEY ? 'loading' : 'error', api: null, error: API_KEY ? '' : 'No Google Maps API key configured.' })
 
@@ -144,6 +153,7 @@ export default function MapPage() {
     setState({ status: 'loading', stops: [], meta: null, error: '' })
     setStatusFilter('All')
     setDriverFilter('All')
+    setFlagFilters({})
     fetchFleetStops({ date })
       .then((res) => {
         if (!cancelled)
@@ -171,14 +181,22 @@ export default function MapPage() {
     for (const f of STATUS_FILTERS) counts[f] = mappedViews.filter((v) => matchesStatusFilter(v, f)).length
     return counts
   }, [mappedViews])
+  const flagCounts = useMemo(() => {
+    const counts = {}
+    for (const f of FLAG_FILTERS) counts[f.key] = mappedViews.filter(f.test).length
+    return counts
+  }, [mappedViews])
   const filteredViews = useMemo(
     () =>
       mappedViews.filter((v) => {
         if (!matchesStatusFilter(v, statusFilter)) return false
         if (driverFilter !== 'All' && v.stop.driverUserName !== driverFilter) return false
+        for (const f of FLAG_FILTERS) {
+          if (flagFilters[f.key] && !f.test(v)) return false
+        }
         return true
       }),
-    [mappedViews, statusFilter, driverFilter],
+    [mappedViews, statusFilter, driverFilter, flagFilters],
   )
 
   // ---- (Re)build markers when the filtered set or the map changes ----
@@ -239,7 +257,8 @@ export default function MapPage() {
   const mappedCount = mappedViews.length
   const unmappedCount = allViews.length - mappedCount
   const visibleCount = filteredViews.length
-  const isFiltered = statusFilter !== 'All' || driverFilter !== 'All'
+  const isFiltered =
+    statusFilter !== 'All' || driverFilter !== 'All' || FLAG_FILTERS.some((f) => flagFilters[f.key])
   const fullDayLabel = `${weekdayFull(date)}, ${formatDate(date + 'T12:00:00Z')}`
 
   return (
@@ -280,6 +299,23 @@ export default function MapPage() {
               onClick={() => setStatusFilter(f)}
             >
               {f} <span className="filterchip__n">{statusCounts[f] ?? 0}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Flag filters — parsed from stop notes (NuVizz parity) */}
+      {state.status === 'ready' && (
+        <div className="filterbar map__filterbar">
+          {FLAG_FILTERS.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              className={`filterchip ${flagFilters[f.key] ? 'is-active' : ''}`}
+              aria-pressed={!!flagFilters[f.key]}
+              onClick={() => setFlagFilters((p) => ({ ...p, [f.key]: !p[f.key] }))}
+            >
+              {f.label} <span className="filterchip__n">{flagCounts[f.key] ?? 0}</span>
             </button>
           ))}
         </div>
