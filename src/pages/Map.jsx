@@ -102,11 +102,16 @@ export default function MapPage() {
     markersRef.current = L.layerGroup().addTo(map)
     mapRef.current = map
 
-    // Allow the map to size itself correctly after the container is painted.
+    // Keep Leaflet's internal size in sync with the container. In a flex column
+    // the container's real height often settles AFTER init, which would otherwise
+    // leave the map blank/mis-sized until an interaction; the observer fixes that.
+    const ro = new ResizeObserver(() => map.invalidateSize())
+    ro.observe(mapElRef.current)
     const t = setTimeout(() => { map.invalidateSize() }, 150)
 
     return () => {
       clearTimeout(t)
+      ro.disconnect()
       // Cleanup on unmount.
       if (mapRef.current) {
         mapRef.current.remove()
@@ -191,7 +196,7 @@ export default function MapPage() {
       </div>
 
       {/* Status legend */}
-      <div className="map__legend legend">
+      <div className="map__legend">
         {LEGEND_ENTRIES.map(({ bucket, color }) => (
           <span key={bucket} className="map__legend-item">
             <span className="map__legend-dot" style={{ background: color }} />
