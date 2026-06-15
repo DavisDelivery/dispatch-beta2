@@ -16,6 +16,16 @@ export const config = { schedule: '*/5 * * * *' } // every 5 minutes
 
 export default async function handler() {
   const now = new Date()
+
+  // Kill switch: when the app is in mock/disabled mode, make NO NuVizz calls.
+  if (process.env.VITE_USE_MOCK_NUVIZZ === 'true') {
+    console.log('fleet-refresh skipped (mock/disabled)', now.toISOString())
+    return new Response(JSON.stringify({ skipped: 'disabled', at: now.toISOString() }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
   const dow = now.getUTCDay() // 0 Sun .. 6 Sat
 
   // Davis dispatches zero loads on weekends; skip the scan entirely.

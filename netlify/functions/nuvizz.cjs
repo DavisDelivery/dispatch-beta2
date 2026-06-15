@@ -35,6 +35,20 @@ exports.handler = async (event) => {
   const path = q.path || '__fleetstops'
   const date = q.date || 'today'
 
+  // Kill switch: when the app is disabled (mock mode), make NO NuVizz calls.
+  // The browser uses the bundled fixture in this mode and never calls here; this
+  // guards against any direct hit reaching NuVizz.
+  if (process.env.VITE_USE_MOCK_NUVIZZ === 'true') {
+    return json(200, {
+      disabled: true,
+      date,
+      count: 0,
+      loads: [],
+      stops: [],
+      meta: { path, source: 'disabled' },
+    })
+  }
+
   try {
     let payload
     switch (path) {
