@@ -10,6 +10,7 @@ const NAV = [
   { to: '/loads', label: 'Loads', short: 'Loads', icon: 'box' },
   { to: '/stops', label: 'Stops', short: 'Stops', icon: 'pin' },
   { to: '/map',   label: 'Map',   short: 'Map',   icon: 'map' },
+  { to: '/routing', label: 'Routing', short: 'Route', icon: 'route' },
   { to: '/build', label: 'Builder', short: 'Build', icon: 'plus' },
 ]
 
@@ -63,6 +64,14 @@ function Icon({ name }) {
           <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6" />
           <line x1="8" y1="2" x2="8" y2="18" />
           <line x1="16" y1="6" x2="16" y2="22" />
+        </svg>
+      )
+    case 'route':
+      return (
+        <svg {...common}>
+          <circle cx="6" cy="19" r="2" />
+          <circle cx="18" cy="5" r="2" />
+          <path d="M8 19h7a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h7" />
         </svg>
       )
     case 'plus':
