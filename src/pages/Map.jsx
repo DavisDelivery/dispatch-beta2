@@ -2,6 +2,7 @@
 // Read-only; no write paths. Status + driver filters; date-driven.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import { fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
 import { buildStopView, statusBucket, STATUS_FILTERS, matchesStatusFilter } from '../lib/stopView.js'
@@ -267,6 +268,9 @@ export default function MapPage() {
         <h1 className="page__title">
           Map
           {IS_MOCK && <span className="pill pill--mock">Mock data</span>}
+          <Link to="/build" className="map__build-link" title="Create orders &amp; assemble loads">
+            ＋ Build orders
+          </Link>
         </h1>
         {state.status === 'ready' && (
           <p className="map__count">
