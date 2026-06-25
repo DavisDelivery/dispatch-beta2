@@ -1273,6 +1273,88 @@ button, input, select { font: inherit; color: inherit; }
   }
 }
 
+/* ---- Plan mode (map-driven plan/unplan) ---- */
+.map__plan-toggle { margin-left: auto; }
+.map__plan-toggle.is-active {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: #04222e;
+  font-weight: 600;
+}
+
+.map__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+}
+.map__tools .wb-btn.is-active {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: #04222e;
+}
+.map__tools-hint { font-size: 0.78rem; color: var(--text-dim); }
+
+/* Box/lasso capture layer — sits over the canvas only while a tool is armed */
+.map__draw {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  cursor: crosshair;
+  touch-action: none;
+}
+.map__box {
+  position: absolute;
+  border: 1.5px dashed #f8fafc;
+  background: rgba(56, 189, 248, 0.15);
+  pointer-events: none;
+}
+.map__lasso { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.map__lasso polyline { fill: rgba(56, 189, 248, 0.12); stroke: #f8fafc; stroke-width: 1.5; }
+
+/* Plan action bar */
+.planbar {
+  margin: 10px 0 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-elev);
+}
+.planbar__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.planbar__title { font-weight: 600; font-size: 0.9rem; }
+.planbar__clear { margin: 0; }
+.planbar__tally {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+.planbar__tally b { color: var(--text); }
+.planbar__creds {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+.planbar__creds label { display: flex; flex-direction: column; gap: 3px; font-size: 0.74rem; color: var(--text-dim); }
+.planbar__creds input {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.82rem;
+}
+.planbar__creds-note { grid-column: 1 / -1; margin: 0; font-size: 0.72rem; color: var(--text-dim); }
+.planbar__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.planbar__load { flex: 1 1 200px; min-width: 160px; }
+@media (max-width: 520px) {
+  .planbar__creds { grid-template-columns: 1fr; }
+}
+
 /* ===========================================================================
    PRINT — clean, ink-friendly light manifest.
    All visual changes are scoped here (or to .print-only which is display:none
