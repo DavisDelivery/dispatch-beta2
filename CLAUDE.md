@@ -4,16 +4,23 @@ Operating notes for any agent (or human) working in this repo.
 
 ## Workflow
 
-- **Branch → draft PR → Chad squash-merges.** The connector/agent does NOT merge.
-  Do all work on a feature branch, open a **draft** PR against `main`, and stop.
-  Chad tests the Netlify deploy preview (on a phone) and squash-merges.
-- **CI green ≠ UI works.** A passing build only means it compiled. The real
-  gate is Chad exercising the deploy preview against the on-preview test script
-  (see the brief / PR body). Don't claim a feature works because the build is green.
+- **Branch → push → squash-merge straight to `main`. Ship forward.**
+  Do all work on a feature branch, open the PR, and **merge it yourself**
+  (squash) once the build/tests pass — no draft gate, no waiting for a
+  preview to be tested first. If something is wrong in production, we fix
+  forward in the next change. Always still open the PR (record + clean
+  squash) and run `npm run build` + `npm test` before merging.
+  (Exception: pause for explicit sign-off only when the change is risky or
+  irreversible — schema/data migrations, auth, deletes, anything that can't
+  be cheaply rolled back.)
+- **CI green ≠ UI works.** A passing build only means it compiled. Don't
+  claim a feature *works* on its build alone — say what you verified
+  (tests, a live round-trip) versus what's only compiled. We catch the rest
+  in production and fix forward.
 - **Bump `APP_VERSION` + the build badge on every functional change.**
   `APP_VERSION` lives in `src/version.js`; the badge renders it with the
-  7-char commit and environment on every page. The version is how Chad knows the
-  preview he's looking at is the one he just pushed.
+  7-char commit and environment on every page. The version is how Chad knows
+  the deploy he's looking at is the one that just shipped.
 
 ## Conventions (see ORCHESTRATION.md for the full list)
 
