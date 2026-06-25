@@ -19,6 +19,7 @@ import {
   normalizeLoad,
   normalizeStop,
 } from '../lib/nuvizzWrite.js'
+import { useCreatedOrders } from '../hooks/useCreatedOrders.js'
 
 const CREDS_KEY = 'dd_write_creds'
 const SETTINGS_KEY = 'dd_write_settings'
@@ -139,7 +140,7 @@ function SettingsBar({ settings, setSettings }) {
   )
 }
 
-function CreateOrders({ creds, settings, canWrite }) {
+function CreateOrders({ creds, settings, canWrite, onCreated }) {
   const [rows, setRows] = useState([blankOrder()])
   const [paste, setPaste] = useState('')
   const [results, setResults] = useState({})
@@ -169,6 +170,20 @@ function CreateOrders({ creds, settings, canWrite }) {
         const resp = await createOrder(creds, stop)
         const s = summarize(resp)
         setResults((p) => ({ ...p, [i]: { ok: s.ok, msg: s.ok ? `created · ${s.entityNbr || ''}` : s.message, stopId: s.entityId } }))
+        if (s.ok && s.entityNbr) {
+          onCreated({
+            stopNbr: s.entityNbr,
+            stopId: s.entityId,
+            name: rows[i].name,
+            addr1: rows[i].addr1,
+            city: rows[i].city,
+            state: rows[i].state,
+            zip: rows[i].zip,
+            pallets: rows[i].pallets,
+            cartons: rows[i].cartons,
+            weight: rows[i].weight,
+          })
+        }
       } catch (err) {
         setResults((p) => ({ ...p, [i]: { ok: false, msg: err.message } }))
       }
@@ -351,7 +366,57 @@ function LoadAssembly({ creds, canWrite }) {
   )
 }
 
+// Running list of orders we've created in UAT (localStorage registry). This is
+// the same list the Routing screen reads to plan/unplan, so it's the canonical
+// record of "orders we created".
+function CreatedOrdersPanel({ orders, remove, clear }) {
+  return (
+    <div className="card wb-card">
+      <h2 className="wb-card__title">
+        Created orders <span className="wb-hint">({orders.length})</span>
+        {orders.length > 0 && (
+          <button className="wb-btn wb-btn--sm" style={{ float: 'right' }} onClick={clear}>
+            Clear all
+          </button>
+        )}
+      </h2>
+      {orders.length === 0 ? (
+        <p className="wb-hint">Orders you create are tracked here, then planned onto loads from the Routing screen.</p>
+      ) : (
+        <div className="wb-tbl-wrap">
+          <table className="wb-tbl">
+            <thead>
+              <tr>
+                <th>Stop #</th><th>Consignee</th><th>City</th><th>ST</th><th>Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {orders.map((o) => (
+                <tr key={o.stopNbr}>
+                  <td className="wb-stop__nbr">{o.stopNbr}</td>
+                  <td>{o.name || '—'}</td>
+                  <td>{o.city || ''}</td>
+                  <td>{o.state || ''}</td>
+                  <td className="wb-st">
+                    {o.plannedLoadNbr ? (
+                      <span className="wb-pill wb-pill--ok" title={o.plannedLoadNbr}>on {o.plannedLoadNbr}</span>
+                    ) : (
+                      <span className="wb-pill">unplanned</span>
+                    )}
+                  </td>
+                  <td><button className="wb-x" title="forget this order" onClick={() => remove(o.stopNbr)}>×</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Builder() {
+  const { orders, add, remove, clear } = useCreatedOrders()
   const [creds, setCreds] = useState(() => load(CREDS_KEY, { companyCode: 'DAVISV5', username: '', password: '' }))
   const [settings, setSettings] = useState(() =>
     load(SETTINGS_KEY, {
@@ -387,7 +452,8 @@ export default function Builder() {
       <CredsBar creds={creds} setCreds={setCreds} />
       <SettingsBar settings={settings} setSettings={setSettings} />
       {!canWrite && <p className="wb-msg wb-msg--err">Enter UAT credentials above to enable writes.</p>}
-      <CreateOrders creds={creds} settings={settings} canWrite={canWrite} />
+      <CreateOrders creds={creds} settings={settings} canWrite={canWrite} onCreated={add} />
+      <CreatedOrdersPanel orders={orders} remove={remove} clear={clear} />
       <LoadAssembly creds={creds} canWrite={canWrite} />
     </section>
   )

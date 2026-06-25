@@ -1,7 +1,8 @@
-// Presentational action bar for the Map's Plan mode. Shows the current selection
-// tally, a target-load picker, and Plan / Unplan buttons wired to the gated
-// NuVizz write function (UAT only). Credentials are entered here when missing and
-// shared with the Builder page (sessionStorage). No write logic lives here.
+// Presentational action bar for map-driven plan/unplan. Shows the current
+// selection tally, a typeable target-load field (datalist of known loads, but
+// any UAT load number can be entered), and Plan / Unplan buttons wired to the
+// gated NuVizz write function (UAT only). Credentials are entered here when
+// missing and shared with the Builder page (sessionStorage). No write logic here.
 
 const fmtWeight = (n) => (n ? `${n.toLocaleString()} lb` : '0 lb')
 
@@ -20,12 +21,10 @@ export default function PlanBar({
   creds,
   setCreds,
   canWrite,
-  isMock,
 }) {
   const set = (k) => (e) => setCreds((p) => ({ ...p, [k]: e.target.value }))
-  const target = loads.find((l) => l.loadNbr === targetLoad)
-  const canPlan = canWrite && !isMock && count > 0 && Boolean(target?.loadId) && !busy
-  const canUnplan = canWrite && !isMock && count > 0 && !busy
+  const canPlan = canWrite && count > 0 && Boolean(targetLoad.trim()) && !busy
+  const canUnplan = canWrite && count > 0 && !busy
 
   return (
     <div className="planbar">
@@ -60,24 +59,28 @@ export default function PlanBar({
         </div>
       )}
 
+      <label className="planbar__target">
+        <span>Target load #</span>
+        <input
+          list="planbar-loads"
+          value={targetLoad}
+          onChange={(e) => setTargetLoad(e.target.value)}
+          placeholder="e.g. LOAD000112225"
+          autoComplete="off"
+          disabled={busy}
+        />
+        <datalist id="planbar-loads">
+          {loads.map((l) => (
+            <option key={l.loadNbr} value={l.loadNbr}>
+              {l.routeName || l.loadNbr}
+              {l.driverUserName ? ` · ${l.driverUserName}` : ''}
+            </option>
+          ))}
+        </datalist>
+      </label>
+
       <div className="planbar__actions">
-        <div className="control control--select planbar__load">
-          <select
-            value={targetLoad}
-            onChange={(e) => setTargetLoad(e.target.value)}
-            aria-label="Target load to plan into"
-            disabled={busy}
-          >
-            <option value="">Plan onto load…</option>
-            {loads.map((l) => (
-              <option key={l.loadNbr} value={l.loadNbr}>
-                {l.routeName || l.loadNbr}
-                {l.driverUserName ? ` · ${l.driverUserName}` : ''}
-              </option>
-            ))}
-          </select>
-        </div>
-        <button type="button" className="wb-btn wb-btn--pri" onClick={onPlan} disabled={!canPlan} title={target ? `Add to ${target.routeName || target.loadNbr}` : 'Pick a target load'}>
+        <button type="button" className="wb-btn wb-btn--pri" onClick={onPlan} disabled={!canPlan} title={targetLoad ? `Add to ${targetLoad}` : 'Enter a target load #'}>
           {busy ? 'Working…' : 'Plan →'}
         </button>
         <button type="button" className="wb-btn" onClick={onUnplan} disabled={!canUnplan} title="Remove selected stops from their current load">
@@ -85,8 +88,7 @@ export default function PlanBar({
         </button>
       </div>
 
-      {isMock && <p className="wb-msg wb-msg--err">Mock data — connect to live NuVizz to plan/unplan.</p>}
-      {!isMock && !canWrite && <p className="wb-msg wb-msg--err">Enter UAT credentials to enable plan/unplan.</p>}
+      {!canWrite && <p className="wb-msg wb-msg--err">Enter UAT credentials to enable plan/unplan.</p>}
       {msg && <p className={`wb-msg ${msgOk ? 'wb-msg--ok' : 'wb-msg--err'}`}>{msg}</p>}
     </div>
   )

@@ -89,13 +89,35 @@ and writes `fleet:<date>` / `stops:<date>` to Netlify Blobs. `getFleet` /
 and tag responses with `source: 'cache'|'live'` + `cachedAt`. Blobs is best-effort:
 any failure degrades to a live scan, never a crash. Manual warm: `?path=__refreshFleet`.
 
-## Mock vs live
+## Live only — no mock (v0.15.0)
 
-- `VITE_USE_MOCK_NUVIZZ=true` → pages render the bundled loads fixture, no creds
-  needed (first deploy preview + `npm run dev`). Handled client-side in
-  `src/lib/nuvizzApi.js`; the function is never called.
-- `VITE_USE_MOCK_NUVIZZ=false` + the `NUVIZZ_*` server vars → live NuVizz data
-  via `GET /.netlify/functions/nuvizz?path=…`.
+Mock mode was removed (`VITE_USE_MOCK_NUVIZZ`, the fixture, and the `IS_MOCK`
+branches are gone). `src/lib/nuvizzApi.js` always calls the Netlify read function
+`GET /.netlify/functions/nuvizz?path=…`. The environment is chosen entirely by the
+function's server env vars (`NUVIZZ_*`).
+
+**Reading UAT** (the orders/loads we create live in UAT). The read function
+discovers a day's loads by scanning a numeric range of load numbers — tuned to
+production (`DAVIS…196xxx`, +100/business-day). UAT numbers are different
+(`LOAD000112xxx`), so `getConfig` (`netlify/functions/lib/nuvizz.cjs`) takes
+env knobs, all defaulting to current prod behaviour:
+- `NUVIZZ_BASE_URL` = `https://uat.nuvizz.com/deliverit/openapi/v7`
+- `NUVIZZ_DAVIS_COMPANY_CODE` = `DAVISV5`, `NUVIZZ_DAVIS_USER` / `NUVIZZ_DAVIS_PASS`
+- `NUVIZZ_LOAD_PREFIX` = `LOAD` (load-number prefix; default = company code)
+- `NUVIZZ_SCAN_MIN` / `NUVIZZ_SCAN_MAX` = scan this FIXED range (UAT loads aren't a
+  per-day sequence; bypasses the date-center estimate + calibration)
+- `NUVIZZ_SCAN_IGNORE_DATE=true` = keep every load found in range (UAT test loads
+  are Draft/Cancelled with no today date; otherwise the date filter hides them)
+
+## Created-orders registry (v0.15.0)
+
+`src/lib/createdOrders.js` (+ `useCreatedOrders` hook) — a localStorage list
+(`dd_created_orders`) of orders we've created in UAT, each carrying its `stopId`.
+The **Builder** appends to it on every successful create and shows the list
+(`CreatedOrdersPanel`). The **Routing** page reads it (Orders tab) so created
+orders are selectable to plan onto a load with no extra read. Planning/unplanning
+updates each order's `plannedLoadNbr`. A `dd-created-orders` window event keeps
+both screens live.
 
 ## Map page (Google Maps; read-only browse)
 
@@ -131,16 +153,20 @@ Read paths + warm cache untouched. Phase 1 = plan/unplan; the route optimizer
   `latLngInBounds`, `boxFromCorners`, `stopKey`) — ported from davis-nuvizz. Screen-pixel→
   LatLng uses an invisible `OverlayView.getProjection()` (`fromContainerPixelToLatLng`,
   exact even when tilted). The draw overlay is `src/components/SelectionDraw.jsx`.
+- **Two selectable sources** funnel into one selection: (1) **created orders** from the
+  registry (Orders tab; carry their `stopId` — no read needed) and (2) **map stops**
+  (click/box/lasso/in-view). Keys: map stops `loadNbr|stopNbr`, orders `order|stopNbr`.
 - `<PlanBar>` (left): selection tally (skids/loose/weight), inline UAT creds bar when
   missing (`useWriteCreds` → sessionStorage `dd_write_creds`, shared with Builder), a
-  **target-load** `<select>`, and **Plan →** / **Unplan** buttons.
-- `<RoutingPanel>` (right rail): **Stops** tab = sortable table of the selection
-  (`useSortableTable` + `SortableTh`) with per-row remove; **Loads** tab = the day's loads
-  (click one to set the Plan target).
-- **Plan** resolves each selected stop's `stopId` (now on the read shape — below — else a
-  `getStop` fallback) and calls `insertStops(creds, targetLoadId, stopIds)` once. **Unplan**
-  groups the selection by current `loadNbr` and calls `removeStops` per load (`load/edit`
-  full-header echo). Both refetch stops + clear selection after.
+  **typeable target-load** field (datalist of the day's loads, but any UAT load # works),
+  and **Plan →** / **Unplan** buttons.
+- `<RoutingPanel>` (right rail): **Orders** tab = the created-orders registry with
+  checkboxes; **Selected** tab = sortable table of the current selection with remove;
+  **Loads** tab = the day's loads (click to set target).
+- **Plan** resolves the target load # → `loadId` (from the day's list, else `getLoad`),
+  collects each selection's `stopId`, and `insertStops` once; marks planned orders in the
+  registry. **Unplan** groups by current load and `removeStops` per load (`load/edit`
+  full-header echo); clears the registry flag. Both refetch + clear selection.
 - **`stopId` on the read shape:** `normalizeStop` in `netlify/functions/lib/nuvizz.cjs`
   now emits `stopId`, so map stops carry it and plan/unplan needs no extra reads.
 - Selection keys on `loadNbr|stopNbr` (`stopKey`). Marker rebuild (on data change) and

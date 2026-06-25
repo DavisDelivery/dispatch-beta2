@@ -63,8 +63,21 @@ function getConfig(env = process.env) {
   const auth = Buffer.from(
     `${env.NUVIZZ_DAVIS_USER}:${env.NUVIZZ_DAVIS_PASS}`,
   ).toString('base64')
+  // Load-number discovery knobs. Defaults preserve production behaviour (prefix =
+  // company code, date-based center scan, date-matched). UAT overrides these:
+  //   NUVIZZ_LOAD_PREFIX   — load-number prefix (UAT loads are LOAD000…, not DAVISV5…)
+  //   NUVIZZ_SCAN_MIN/MAX  — scan this FIXED numeric range instead of the date-center
+  //   NUVIZZ_SCAN_IGNORE_DATE=true — keep every load found in range (UAT test loads
+  //                          are Draft/Cancelled with no today date; without this the
+  //                          date filter hides them).
+  const scanMin = Number(env.NUVIZZ_SCAN_MIN)
+  const scanMax = Number(env.NUVIZZ_SCAN_MAX)
   return {
     companyCode,
+    loadPrefix: (env.NUVIZZ_LOAD_PREFIX || companyCode).toUpperCase(),
+    scanMin: Number.isFinite(scanMin) ? scanMin : null,
+    scanMax: Number.isFinite(scanMax) ? scanMax : null,
+    ignoreDate: env.NUVIZZ_SCAN_IGNORE_DATE === 'true',
     baseUrl: (env.NUVIZZ_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, ''),
     authHeader: `Basic ${auth}`,
   }
@@ -334,9 +347,9 @@ async function scanRange(cfg, lo, hi, targetDate) {
   async function worker() {
     while (cursor < numbers.length) {
       const n = numbers[cursor++]
-      const loadNbr = padLoadNbr(cfg.companyCode, n)
+      const loadNbr = padLoadNbr(cfg.loadPrefix, n)
       const load = await fetchLoadRaw(cfg, loadNbr)
-      if (load && loadDate(load) === targetDate) {
+      if (load && (cfg.ignoreDate || loadDate(load) === targetDate)) {
         found.push({ n, load })
       }
     }
@@ -352,6 +365,12 @@ async function scanRange(cfg, lo, hi, targetDate) {
 async function discoverLoads(cfg, targetDate) {
   let lo
   let hi
+  // Fixed-range mode (UAT): scan exactly NUVIZZ_SCAN_MIN..MAX, no date-center
+  // estimate, no calibration narrowing (the loads aren't a per-day sequence).
+  if (cfg.scanMin != null && cfg.scanMax != null) {
+    return (await scanRange(cfg, cfg.scanMin, cfg.scanMax, targetDate)).map((f) => f.load)
+  }
+
   const cal = calibration.get(targetDate)
   if (cal && Date.now() - cal.at < CALIBRATION_TTL_MS) {
     lo = cal.min

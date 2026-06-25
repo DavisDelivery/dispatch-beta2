@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
+import { fetchFleetStops } from '../lib/nuvizzApi.js'
 import { buildStopView, STATUS_FILTERS, matchesStatusFilter } from '../lib/stopView.js'
 import { STOP_CHIPS } from '../lib/parseStopComments.ts'
 import { formatDate } from '../lib/format.js'
@@ -121,7 +121,6 @@ export default function Stops() {
       <div className="stops__head">
         <h1 className="page__title">
           Stops
-          {IS_MOCK && <span className="pill pill--mock">Mock data</span>}
         </h1>
         <p className="stops__count">
           {state.status === 'ready' ? (
