@@ -1,23 +1,23 @@
-// Routing (beta) — map-driven plan/unplan workspace.
-// Two selectable sources funnel into ONE selection + Plan/Unplan action:
-//   1. Created orders (the UAT registry from the Builder) — Orders tab. These
-//      carry their stopId, so planning needs no extra read.
-//   2. Map stops (the day's scanned load-stops) — click / box / lasso / in-view.
-// Plan adds the selection onto a target load you name (resolved via getLoad if it
-// isn't in the day's list); Unplan removes them from their current load. Both
-// drive the gated UAT write function and update the created-orders registry.
+// Routing (beta) — map-driven plan/unplan workspace, UAT watchlist model.
+//
+// The board is YOUR sandbox, driven entirely by the live write function (getLoad/
+// getStop) — no scan, no read-fn dependency:
+//   • Created orders (the Builder registry) — Orders tab. Carry their stopId.
+//   • Watched loads (load #s you add, plus any load your orders are planned onto)
+//     — Loads tab. Read live via getLoad + getStop (names/coords).
+// Plan adds the selection onto a target load; Unplan removes selected stops from
+// their current load. Both update the created-orders registry's planned state.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { fetchFleetStops } from '../lib/nuvizzApi.js'
-import { buildStopView } from '../lib/stopView.js'
 import { getStop, getLoad, insertStops, removeStops, normalizeStop, normalizeLoad, summarize } from '../lib/nuvizzWrite.js'
-import { latLngInBounds, stopKey } from '../lib/routingSelect.js'
+import { latLngInBounds } from '../lib/routingSelect.js'
 import { markerIcon, LEGEND_ENTRIES } from '../lib/statusColors.js'
 import { formatDate } from '../lib/format.js'
 import { useSelectedDate } from '../hooks/useSelectedDate.js'
 import { useWriteCreds } from '../hooks/useWriteCreds.js'
 import { useCreatedOrders } from '../hooks/useCreatedOrders.js'
+import { useWatchedLoads } from '../hooks/useWatchedLoads.js'
 import { loadGoogleMaps } from '../lib/googleMaps.js'
 import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import SelectionDraw from '../components/SelectionDraw.jsx'
@@ -27,25 +27,28 @@ import RoutingPanel from '../components/RoutingPanel.jsx'
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || ''
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-function weekdayFull(iso) {
-  return WEEKDAYS[new Date(iso + 'T12:00:00Z').getUTCDay()]
-}
+const weekdayFull = (iso) => WEEKDAYS[new Date(iso + 'T12:00:00Z').getUTCDay()]
 
-const orderKey = (o) => `order|${o.stopNbr}`
+const orderKey = (stopNbr) => `order|${stopNbr}`
+const loadStopKey = (loadNbr, stopNbr) => `load|${loadNbr}|${stopNbr}`
 
 export default function RoutingPage() {
   const { date } = useSelectedDate()
-  const [state, setState] = useState({ status: 'loading', stops: [], error: '' })
   const [maps, setMaps] = useState({ status: API_KEY ? 'loading' : 'error', api: null, error: API_KEY ? '' : 'No Google Maps API key configured.' })
 
   const { creds, setCreds, canWrite } = useWriteCreds()
   const { orders, setPlanned } = useCreatedOrders()
-  const [selectMode, setSelectMode] = useState(null) // null | 'box' | 'lasso'
+  const { loads: watched, watch, unwatch } = useWatchedLoads()
+
+  const [loadData, setLoadData] = useState({}) // loadNbr -> { loadNbr, loadId, routeName, status, stops[], loading, error }
+  const [selectMode, setSelectMode] = useState(null)
   const [selectedKeys, setSelectedKeys] = useState(() => new Set())
   const [targetLoad, setTargetLoad] = useState('')
+  const [watchInput, setWatchInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState(null)
   const [railTab, setRailTab] = useState('orders')
+  const [tick, setTick] = useState(0)
 
   const mapElRef = useRef(null)
   const mapRef = useRef(null)
@@ -56,7 +59,128 @@ export default function RoutingPage() {
   selectedKeysRef.current = selectedKeys
   const clickRef = useRef(() => {})
 
-  // ---- Load Google Maps once ----
+  // The set of loads to read: explicit watchlist + any load our orders are planned onto.
+  const fetchList = useMemo(() => {
+    const s = new Set(watched)
+    for (const o of orders) if (o.plannedLoadNbr) s.add(o.plannedLoadNbr)
+    return [...s]
+  }, [watched, orders])
+  const fetchKey = fetchList.join(',')
+
+  // ---- Read each watched load live (getLoad + getStop enrichment) ----
+  useEffect(() => {
+    if (!canWrite || !fetchList.length) return
+    let cancelled = false
+    ;(async () => {
+      for (const nbr of fetchList) {
+        setLoadData((p) => ({ ...p, [nbr]: { ...(p[nbr] || { loadNbr: nbr }), loading: true } }))
+        try {
+          const L = normalizeLoad(await getLoad(creds, nbr))
+          const stops = await Promise.all(
+            L.stops.map(async (s) => {
+              try {
+                const d = normalizeStop(await getStop(creds, s.stopNbr))
+                return { stopNbr: s.stopNbr, stopId: s.stopId || d.stopId, stopSeq: s.stopSeq, name: d.toName, city: d.toCity, state: d.toState, latitude: d.latitude, longitude: d.longitude }
+              } catch {
+                return { stopNbr: s.stopNbr, stopId: s.stopId, stopSeq: s.stopSeq }
+              }
+            }),
+          )
+          if (cancelled) return
+          setLoadData((p) => ({ ...p, [nbr]: { loadNbr: L.loadNbr || nbr, loadId: L.loadId, routeName: L.routeName, status: L.status, stops, loading: false, error: L.loadId ? '' : 'not found' } }))
+        } catch (e) {
+          if (!cancelled) setLoadData((p) => ({ ...p, [nbr]: { loadNbr: nbr, stops: [], loading: false, error: e.message } }))
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [fetchKey, canWrite, creds, tick]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const refreshLoads = useCallback(() => setTick((t) => t + 1), [])
+
+  // Watched-load list (for the Loads tab), in watchlist order then planned-only.
+  const watchedLoads = useMemo(
+    () => fetchList.map((nbr) => loadData[nbr] || { loadNbr: nbr, stops: [], loading: true }),
+    [fetchList, loadData],
+  )
+
+  // ---- Selectable universe: created orders + watched-load stops ----
+  const orderEntries = useMemo(
+    () =>
+      orders.map((o) => ({
+        key: orderKey(o.stopNbr),
+        isOrder: true,
+        stop: {
+          stopNbr: o.stopNbr,
+          stopId: o.stopId,
+          name: o.name,
+          city: o.city,
+          state: o.state,
+          loadNbr: o.plannedLoadNbr || '',
+          totalPallets: Number(o.pallets) || 0,
+          totalCartons: Number(o.cartons) || 0,
+          weight: Number(o.weight) || 0,
+        },
+      })),
+    [orders],
+  )
+  const loadStopEntries = useMemo(() => {
+    const out = []
+    for (const ld of watchedLoads) {
+      for (const s of ld.stops || []) {
+        out.push({
+          key: loadStopKey(ld.loadNbr, s.stopNbr),
+          isOrder: false,
+          stop: { ...s, loadNbr: ld.loadNbr },
+        })
+      }
+    }
+    return out
+  }, [watchedLoads])
+
+  const selectable = useMemo(() => {
+    const m = new Map()
+    for (const e of loadStopEntries) m.set(e.key, e)
+    for (const e of orderEntries) m.set(e.key, e)
+    return m
+  }, [loadStopEntries, orderEntries])
+
+  const mappedEntries = useMemo(
+    () => [...selectable.values()].filter((e) => typeof e.stop.latitude === 'number' && typeof e.stop.longitude === 'number'),
+    [selectable],
+  )
+
+  const selectedStops = useMemo(() => [...selectedKeys].map((k) => selectable.get(k)).filter(Boolean), [selectedKeys, selectable])
+  const tally = useMemo(() => {
+    let skids = 0
+    let pieces = 0
+    let weight = 0
+    for (const { stop } of selectedStops) {
+      skids += stop.totalPallets || 0
+      pieces += stop.totalCartons || 0
+      weight += stop.weight || 0
+    }
+    return { skids, pieces, weight }
+  }, [selectedStops])
+
+  // Day's loads, for the Plan target datalist.
+  const loadOptions = useMemo(
+    () => watchedLoads.filter((l) => l.loadId).map((l) => ({ loadNbr: l.loadNbr, loadId: l.loadId, routeName: l.routeName, driverUserName: '', stopCount: (l.stops || []).length })),
+    [watchedLoads],
+  )
+
+  const toggleKey = useCallback((k) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev)
+      next.has(k) ? next.delete(k) : next.add(k)
+      return next
+    })
+  }, [])
+  clickRef.current = (key) => toggleKey(key)
+
+  // ---- Google Maps lifecycle ----
   useEffect(() => {
     if (!API_KEY) return
     let cancelled = false
@@ -68,18 +192,10 @@ export default function RoutingPage() {
     }
   }, [])
 
-  // ---- Create map once ready ----
   useEffect(() => {
     if (maps.status !== 'ready' || !mapElRef.current || mapRef.current) return
     const api = maps.api
-    const map = new api.Map(mapElRef.current, {
-      center: { lat: 35.5, lng: -80.0 },
-      zoom: 8,
-      mapTypeControl: true,
-      streetViewControl: false,
-      fullscreenControl: true,
-      clickableIcons: false,
-    })
+    const map = new api.Map(mapElRef.current, { center: { lat: 35.5, lng: -80.0 }, zoom: 8, mapTypeControl: true, streetViewControl: false, fullscreenControl: true, clickableIcons: false })
     clustererRef.current = new MarkerClusterer({ map })
     const projOv = new api.OverlayView()
     projOv.onAdd = projOv.draw = projOv.onRemove = () => {}
@@ -96,98 +212,6 @@ export default function RoutingPage() {
     }
   }, [maps.status])
 
-  // ---- Fetch stops on date change ----
-  useEffect(() => {
-    let cancelled = false
-    setState({ status: 'loading', stops: [], error: '' })
-    setSelectedKeys(new Set())
-    setMsg(null)
-    fetchFleetStops({ date })
-      .then((res) => !cancelled && setState({ status: 'ready', stops: res.stops, error: '' }))
-      .catch((err) => !cancelled && setState({ status: 'error', stops: [], error: err.message }))
-    return () => {
-      cancelled = true
-    }
-  }, [date])
-
-  const refresh = useCallback(async () => {
-    const res = await fetchFleetStops({ date })
-    setState({ status: 'ready', stops: res.stops, error: '' })
-  }, [date])
-
-  const allViews = useMemo(() => (state.status === 'ready' ? state.stops.map(buildStopView) : []), [state.stops, state.status])
-  const mappedViews = useMemo(
-    () => allViews.filter(({ stop }) => typeof stop.latitude === 'number' && typeof stop.longitude === 'number'),
-    [allViews],
-  )
-  const loadsList = useMemo(() => {
-    const m = new Map()
-    for (const { stop } of allViews) {
-      if (!stop.loadNbr) continue
-      if (!m.has(stop.loadNbr)) m.set(stop.loadNbr, { loadNbr: stop.loadNbr, loadId: stop.loadId, routeName: stop.routeName, driverUserName: stop.driverUserName, stopCount: 0 })
-      m.get(stop.loadNbr).stopCount += 1
-    }
-    return Array.from(m.values()).sort((a, b) => (a.routeName || a.loadNbr).localeCompare(b.routeName || b.loadNbr))
-  }, [allViews])
-
-  // Created orders as selectable pseudo-stops (carry stopId; loadNbr when planned).
-  const orderEntries = useMemo(
-    () =>
-      orders.map((o) => ({
-        key: orderKey(o),
-        isOrder: true,
-        order: o,
-        stop: {
-          stopNbr: o.stopNbr,
-          stopId: o.stopId,
-          name: o.name,
-          city: o.city,
-          state: o.state,
-          loadNbr: o.plannedLoadNbr || '',
-          totalPallets: Number(o.pallets) || 0,
-          totalCartons: Number(o.cartons) || 0,
-          weight: Number(o.weight) || 0,
-        },
-      })),
-    [orders],
-  )
-
-  // One selectable index keyed by stop key — map stops + created orders.
-  const selectable = useMemo(() => {
-    const m = new Map()
-    for (const v of mappedViews) m.set(stopKey(v.stop), { key: stopKey(v.stop), isOrder: false, stop: v.stop })
-    for (const e of orderEntries) m.set(e.key, e)
-    return m
-  }, [mappedViews, orderEntries])
-
-  const selectedStops = useMemo(
-    () => [...selectedKeys].map((k) => selectable.get(k)).filter(Boolean),
-    [selectedKeys, selectable],
-  )
-  const tally = useMemo(() => {
-    let skids = 0
-    let pieces = 0
-    let weight = 0
-    for (const { stop } of selectedStops) {
-      skids += stop.totalPallets || 0
-      pieces += stop.totalCartons || 0
-      weight += stop.weight || 0
-    }
-    return { skids, pieces, weight }
-  }, [selectedStops])
-
-  const toggleKey = useCallback((k) => {
-    setSelectedKeys((prev) => {
-      const next = new Set(prev)
-      next.has(k) ? next.delete(k) : next.add(k)
-      return next
-    })
-  }, [])
-
-  // Marker click toggles selection.
-  clickRef.current = (key) => toggleKey(key)
-
-  // ---- Build markers for mapped (scanned) stops ----
   useEffect(() => {
     const map = mapRef.current
     const api = maps.api
@@ -197,33 +221,28 @@ export default function RoutingPage() {
     const byKey = new Map()
     const markers = []
     const bounds = new api.LatLngBounds()
-    for (const view of mappedViews) {
-      const { stop } = view
-      const key = stopKey(stop)
-      const pos = { lat: stop.latitude, lng: stop.longitude }
-      const marker = new api.Marker({ position: pos, title: stop.name || '', icon: markerIcon(api, stop, selectedKeysRef.current.has(key)) })
-      marker.addListener('click', () => clickRef.current(key))
+    for (const e of mappedEntries) {
+      const pos = { lat: e.stop.latitude, lng: e.stop.longitude }
+      const marker = new api.Marker({ position: pos, title: e.stop.name || e.stop.stopNbr || '', icon: markerIcon(api, e.stop, selectedKeysRef.current.has(e.key)) })
+      marker.addListener('click', () => clickRef.current(e.key))
       markers.push(marker)
-      byKey.set(key, { marker, stop })
+      byKey.set(e.key, { marker, stop: e.stop })
       bounds.extend(pos)
     }
     clusterer.addMarkers(markers)
     markerByKeyRef.current = byKey
-    if (mappedViews.length === 1) {
+    if (mappedEntries.length === 1) {
       map.setCenter(bounds.getCenter())
       map.setZoom(13)
-    } else if (mappedViews.length > 1) {
+    } else if (mappedEntries.length > 1) {
       map.fitBounds(bounds, 40)
     }
-  }, [mappedViews, maps.status])
+  }, [mappedEntries, maps.status])
 
-  // ---- Restyle markers on selection change (no rebuild / no re-fit) ----
   useEffect(() => {
     const api = maps.api
     if (!api) return
-    for (const [key, rec] of markerByKeyRef.current) {
-      rec.marker.setIcon(markerIcon(api, rec.stop, selectedKeys.has(key)))
-    }
+    for (const [key, rec] of markerByKeyRef.current) rec.marker.setIcon(markerIcon(api, rec.stop, selectedKeys.has(key)))
   }, [selectedKeys, maps.status])
 
   const project = useCallback(
@@ -249,8 +268,8 @@ export default function RoutingPage() {
     const ne = b.getNorthEast()
     const sw = b.getSouthWest()
     const box = { north: ne.lat(), south: sw.lat(), east: ne.lng(), west: sw.lng() }
-    mergeSelection(mappedViews.filter((v) => latLngInBounds(v.stop.latitude, v.stop.longitude, box)).map((v) => stopKey(v.stop)))
-  }, [mappedViews, mergeSelection])
+    mergeSelection(mappedEntries.filter((e) => latLngInBounds(e.stop.latitude, e.stop.longitude, box)).map((e) => e.key))
+  }, [mappedEntries, mergeSelection])
 
   const removeKey = useCallback((key) => {
     setSelectedKeys((prev) => {
@@ -263,30 +282,25 @@ export default function RoutingPage() {
   const resolveStopId = useCallback(
     async (stop) => {
       if (stop.stopId) return stop.stopId
-      const r = await getStop(creds, stop.stopNbr)
-      return normalizeStop(r).stopId
+      return normalizeStop(await getStop(creds, stop.stopNbr)).stopId
     },
     [creds],
   )
 
-  // Resolve the target load number -> loadId (from the day's list, else getLoad).
   const resolveTargetLoad = useCallback(
     async (nbr) => {
-      const known = loadsList.find((l) => l.loadNbr === nbr)
+      const known = loadOptions.find((l) => l.loadNbr === nbr)
       if (known?.loadId) return { loadId: known.loadId, loadNbr: nbr }
       const norm = normalizeLoad(await getLoad(creds, nbr))
       if (!norm.loadId) throw new Error(`Load ${nbr} not found`)
       return { loadId: norm.loadId, loadNbr: norm.loadNbr || nbr }
     },
-    [creds, loadsList],
+    [creds, loadOptions],
   )
 
   const onPlan = useCallback(async () => {
-    const nbr = targetLoad.trim()
-    if (!nbr) {
-      setMsg({ text: 'Enter a target load # first.', ok: false })
-      return
-    }
+    const nbr = targetLoad.trim().toUpperCase()
+    if (!nbr) return setMsg({ text: 'Enter a target load # first.', ok: false })
     setBusy(true)
     setMsg(null)
     try {
@@ -304,15 +318,16 @@ export default function RoutingPage() {
       const s = summarize(await insertStops(creds, target.loadId, ids))
       if (!s.ok) throw new Error(s.message)
       if (orderNbrs.length) setPlanned(orderNbrs, target.loadNbr)
+      watch(target.loadNbr)
       setMsg({ text: `Planned ${ids.length} order(s) onto ${target.loadNbr}.`, ok: true })
-      await refresh()
       setSelectedKeys(new Set())
+      refreshLoads()
     } catch (e) {
       setMsg({ text: e.message, ok: false })
     } finally {
       setBusy(false)
     }
-  }, [creds, targetLoad, selectedStops, resolveStopId, resolveTargetLoad, setPlanned, refresh])
+  }, [creds, targetLoad, selectedStops, resolveStopId, resolveTargetLoad, setPlanned, watch, refreshLoads])
 
   const onUnplan = useCallback(async () => {
     setBusy(true)
@@ -329,7 +344,7 @@ export default function RoutingPage() {
         byLoad.get(loadNbr).push(id)
         if (sel.isOrder) orderNbrs.push(sel.stop.stopNbr)
       }
-      if (!byLoad.size) throw new Error('Nothing to unplan — selected orders aren’t on a load.')
+      if (!byLoad.size) throw new Error('Nothing to unplan — selected items aren’t on a load.')
       let total = 0
       const failures = []
       for (const [loadNbr, ids] of byLoad) {
@@ -339,33 +354,39 @@ export default function RoutingPage() {
       }
       if (orderNbrs.length) setPlanned(orderNbrs, null)
       setMsg(failures.length ? { text: `Unplanned ${total}; errors — ${failures.join(' · ')}`, ok: false } : { text: `Unplanned ${total} order(s).`, ok: true })
-      await refresh()
       setSelectedKeys(new Set())
+      refreshLoads()
     } catch (e) {
       setMsg({ text: e.message, ok: false })
     } finally {
       setBusy(false)
     }
-  }, [creds, selectedStops, resolveStopId, setPlanned, refresh])
+  }, [creds, selectedStops, resolveStopId, setPlanned, refreshLoads])
+
+  const onWatch = useCallback(() => {
+    const n = watchInput.trim()
+    if (n) {
+      watch(n)
+      setWatchInput('')
+      setRailTab('loads')
+    }
+  }, [watchInput, watch])
 
   const fullDayLabel = `${weekdayFull(date)}, ${formatDate(date + 'T12:00:00Z')}`
 
   return (
     <section className="page page--routing">
       <div className="routing__head">
-        <h1 className="page__title">
-          Routing <span className="pill pill--beta">beta</span>
-        </h1>
+        <h1 className="page__title">Routing <span className="pill pill--beta">beta</span></h1>
         <p className="routing__sub">
-          <strong>{fullDayLabel}</strong> · {orders.length} created order(s) · {mappedViews.length} mapped · {selectedKeys.size} selected
+          <strong>{fullDayLabel}</strong> · {orders.length} order(s) · {watchedLoads.length} load(s) watched · {selectedKeys.size} selected
         </p>
       </div>
 
       <div className="routing__grid">
-        {/* Left: select tools + plan action bar */}
         <div className="routing__controls">
           <div className="routing__section-title">1 · Select</div>
-          <p className="map__tools-hint">Check orders in the <b>Orders</b> tab → or pick map stops below.</p>
+          <p className="map__tools-hint">Check orders (<b>Orders</b>) or load stops (<b>Loads</b>) → then Plan/Unplan.</p>
           <div className="map__tools">
             <button type="button" className="wb-btn wb-btn--sm" onClick={addInView}>＋ In view</button>
             <button type="button" className={`wb-btn wb-btn--sm ${selectMode === 'box' ? 'is-active' : ''}`} onClick={() => setSelectMode((m) => (m === 'box' ? null : 'box'))}>▱ Box</button>
@@ -377,7 +398,7 @@ export default function RoutingPage() {
           <PlanBar
             count={selectedKeys.size}
             tally={tally}
-            loads={loadsList}
+            loads={loadOptions}
             targetLoad={targetLoad}
             setTargetLoad={setTargetLoad}
             onPlan={onPlan}
@@ -401,7 +422,6 @@ export default function RoutingPage() {
           </div>
         </div>
 
-        {/* Center: the map */}
         <div className="routing__map">
           <div className="map__container">
             {maps.status === 'error' && (
@@ -411,16 +431,15 @@ export default function RoutingPage() {
               </div>
             )}
             {maps.status === 'loading' && <div className="map__empty">Loading map…</div>}
-            {maps.status === 'ready' && state.status === 'ready' && mappedViews.length === 0 && (
-              <div className="map__empty">No load-stops on the map for this day. Plan created orders from the Orders tab →</div>
+            {maps.status === 'ready' && mappedEntries.length === 0 && (
+              <div className="map__empty">No geocoded stops yet. Add a load in the Loads tab, or plan created orders →</div>
             )}
-            {state.status === 'error' && <div className="map__empty">Could not load stops: {state.error}</div>}
             <div ref={mapElRef} className="map__canvas" aria-label="Routing map" />
             {selectMode && maps.status === 'ready' && (
               <SelectionDraw
                 mode={selectMode}
                 project={project}
-                candidates={mappedViews}
+                candidates={mappedEntries}
                 onCommit={(keys) => {
                   mergeSelection(keys)
                   setSelectMode(null)
@@ -431,7 +450,6 @@ export default function RoutingPage() {
           </div>
         </div>
 
-        {/* Right: Orders / Selected / Loads rail */}
         <RoutingPanel
           tab={railTab}
           setTab={setRailTab}
@@ -440,9 +458,15 @@ export default function RoutingPage() {
           onToggleOrder={toggleKey}
           stops={selectedStops}
           onRemove={removeKey}
-          loads={loadsList}
+          watchedLoads={watchedLoads}
+          watchInput={watchInput}
+          setWatchInput={setWatchInput}
+          onWatch={onWatch}
+          onUnwatch={unwatch}
+          onToggleStop={toggleKey}
           targetLoad={targetLoad}
           setTargetLoad={setTargetLoad}
+          loadStopKey={loadStopKey}
         />
       </div>
     </section>

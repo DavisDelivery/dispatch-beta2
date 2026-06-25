@@ -138,6 +138,8 @@ export function normalizeStop(resp) {
   const S = (d && d.Stop) || d || {}
   const st = S.stop || {}
   const exec = S.stopExecutionInfo || {}
+  const addr = st.to?.address || {}
+  const num = (v) => (v == null || v === '' ? null : Number(v))
   return {
     stopId: st.stopId,
     stopNbr: st.stopNbr,
@@ -145,8 +147,11 @@ export function normalizeStop(resp) {
     status: exec.stopStatus,
     assignedLoadNbr: S.load?.loadNbr,
     assignedRouteName: S.load?.routeName,
-    toName: st.to?.address?.name,
-    toCity: st.to?.address?.city,
+    toName: addr.name,
+    toCity: addr.city,
+    toState: addr.state,
+    latitude: num(addr.latitude ?? addr.lat),
+    longitude: num(addr.longitude ?? addr.lng ?? addr.lon),
     products: Array.isArray(st.stopDetails) ? st.stopDetails.length : 0,
   }
 }
