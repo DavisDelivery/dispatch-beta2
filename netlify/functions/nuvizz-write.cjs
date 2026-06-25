@@ -17,6 +17,8 @@
 
 const UAT_BASE = 'https://uat.nuvizz.com/deliverit/openapi/v7'
 
+const counter = require('./lib/callCounter.cjs')
+
 function json(statusCode, body) {
   return {
     statusCode,
@@ -30,7 +32,14 @@ function basicAuth(username, password) {
 }
 
 // GET/POST helper against the UAT v7 surface with the caller-supplied Basic auth.
+// Every call here is one real upstream NuVizz round-trip → count it (best-effort,
+// never blocks the write) before the fetch so even a thrown fetch is reflected.
 async function nuvizz(method, path, auth, body) {
+  try {
+    await counter.recordCall(path)
+  } catch {
+    /* counter is best-effort */
+  }
   const res = await fetch(`${UAT_BASE}/${path}`, {
     method,
     headers: {

@@ -19,6 +19,13 @@ async function call(op, creds, args = {}) {
     body: JSON.stringify({ op, ...creds, ...args }),
   })
   const data = await res.json().catch(() => ({}))
+  // Each call is ≥1 upstream NuVizz round-trip (the server counted it) — nudge the
+  // call-counter pill to refetch.
+  try {
+    window.dispatchEvent(new Event('dd-api-call'))
+  } catch {
+    /* non-browser */
+  }
   if (!res.ok) {
     throw new Error(data?.error ? data.error : `Write request failed (${res.status})`)
   }
