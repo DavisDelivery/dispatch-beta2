@@ -5,6 +5,7 @@ import Workbench from './pages/Workbench.jsx'
 import Loads from './pages/Loads.jsx'
 import Stops from './pages/Stops.jsx'
 import MapPage from './pages/Map.jsx'
+import RoutingPage from './pages/Routing.jsx'
 import Driver from './pages/Driver.jsx'
 import Builder from './pages/Builder.jsx'
 
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="loads" element={<Loads />} />
         <Route path="stops" element={<Stops />} />
         <Route path="map" element={<MapPage />} />
+        <Route path="routing" element={<RoutingPage />} />
         <Route path="build" element={<Builder />} />
         <Route path="driver/:userName" element={<Driver />} />
         {/* Unknown routes fall back to the Dashboard. */}

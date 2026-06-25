@@ -64,10 +64,12 @@ src/
                       #   Driver (/driver/:userName) — focused single-driver day view:
                       #     loads + ordered stop sequence via fetchDriver; reachable from
                       #     the "View day ›" link in each Workbench driver-group header
-                      #   Map (/map) — day's stops plotted on a GOOGLE map;
+                      #   Map (/map) — day's stops on a GOOGLE map (READ-ONLY);
                       #     api.Marker per stop, coloured by status bucket; clustered;
-                      #     fitBounds to visible markers; InfoWindow w/ name/addr/ETA +
-                      #     Street View; Plan mode = box/lasso/in-view select -> plan/unplan
+                      #     fitBounds to visible markers; InfoWindow + Street View; filters
+                      #   Routing (/routing) — map-driven PLAN/UNPLAN (v0.14.0): box/lasso/
+                      #     in-view select -> target load -> insertStops/removeStops (UAT,
+                      #     gated). Left controls · map · right Stops/Loads rail.
 netlify/functions/
   nuvizz.cjs          # GET endpoint: ?path=__fleet|__fleetstops|__driver|
                       #   __refreshLoad|__refreshFleet (the only HTTP surface)
@@ -95,52 +97,55 @@ any failure degrades to a live scan, never a crash. Manual warm: `?path=__refres
 - `VITE_USE_MOCK_NUVIZZ=false` + the `NUVIZZ_*` server vars → live NuVizz data
   via `GET /.netlify/functions/nuvizz?path=…`.
 
-## Map page (Google Maps; Plan mode v0.13.0)
+## Map page (Google Maps; read-only browse)
 
 `/map` — **Google Maps JS API** (imperative; `src/lib/googleMaps.js` script loader +
 `@googlemaps/markerclusterer`). Key in `VITE_GOOGLE_MAPS_API_KEY` (public, referrer-
 restricted; no key → "Map unavailable" overlay). *(Earlier docs said Leaflet/OSM — the
-page was migrated to Google Maps; this section is the source of truth.)*
+page was migrated to Google Maps; this section is the source of truth.)* **Read-only**;
+plan/unplan lives on `/routing` (links there from the header).
 - `api.Marker` per stop with valid `latitude`/`longitude`; circle symbol colored by status
-  bucket (same hex palette as the stopcard status CSS); clustered via MarkerClusterer.
+  bucket (shared `src/lib/statusColors.js`); clustered via MarkerClusterer.
 - `map.fitBounds()` re-fits to the **currently visible (filtered)** markers when the
-  filtered set changes; selection restyle does NOT re-fit. Empty-state overlays.
+  filtered set changes. Empty-state overlays.
 - `InfoWindow` (DOM node) shows name, address, ETA (12h), appt, status, Non-Uline Rev,
   and a Street View button (opens the embedded panorama).
 - **Status filters** + **flag filters** (appt/liftgate/restriction/unflagged) + **driver
   filter** — all `.filterchip`/`<select>`, reusing `STATUS_FILTERS`/`matchesStatusFilter`
   + parsed comment flags; counts are of *mapped* stops; filters AND together.
-- React 18 StrictMode guard: map instance + InfoWindow + clusterer + projection overlay
-  held in refs; second init is a no-op; refs dropped on unmount so a remount re-creates.
-- Mock mode: fixture stops have lat/lng, so the map renders without credentials. (Plan
-  mode writes are disabled in mock — UAT only.)
+- React 18 StrictMode guard: map instance + InfoWindow + clusterer held in refs; second
+  init is a no-op; refs dropped on unmount so a remount re-creates.
+- Mock mode: fixture stops have lat/lng, so the map renders without credentials.
 
-### Plan mode (v0.13.0) — map-driven plan/unplan
+## Routing page (v0.14.0) — map-driven plan/unplan
 
-A **"✋ Plan mode"** toggle (in the driver row) turns the read-only map into a write
-surface that drives the existing gated NuVizz write function (`nuvizz-write.cjs`;
-UAT-only, `NUVIZZ_WRITE_ENABLED`). Read paths and the warm cache are untouched.
-- **Select** stops three ways: click a marker to toggle; **＋ In view** (current map
-  bounds); **▱ Box** (drag a rectangle); **⬠ Lasso** (draw a shape). Selected markers
-  enlarge + gain a light ring. Esc cancels an armed draw tool.
+`/routing` — dedicated workspace mirroring the davis-nuvizz Routing layout: **left
+controls · center map · right Stops/Loads rail** (`.routing__grid`; on mobile the map
+stacks first via grid-areas). The whole page is a select surface that drives the existing
+gated NuVizz write function (`nuvizz-write.cjs`; **UAT-only**, `NUVIZZ_WRITE_ENABLED`).
+Read paths + warm cache untouched. Phase 1 = plan/unplan; the route optimizer
+(trucks + Build + Result) is the planned next layer.
+- **Select** stops: click a marker to toggle; **＋ In view** (map bounds); **▱ Box**
+  (drag); **⬠ Lasso** (draw). Selected markers enlarge + gain a light ring; Esc cancels.
 - Geometry is the pure, tested `src/lib/routingSelect.js` (`pointInPolygon`,
-  `latLngInBounds`, `boxFromCorners`, `stopKey`) — ported from the davis-nuvizz routing
-  tool. Screen-pixel→LatLng uses an invisible `OverlayView.getProjection()`
-  (`fromContainerPixelToLatLng`, exact even when tilted) held in `projectionRef`.
-- `<PlanBar>` (`src/components/PlanBar.jsx`) shows the selection tally (skids/loose/
-  weight), an inline UAT creds bar when missing (shared via `useWriteCreds` →
-  sessionStorage `dd_write_creds`, same as Builder), a **target-load** `<select>`
-  (distinct loads derived from the day's stops; carries `loadId`), and **Plan →** /
-  **Unplan** buttons.
-- **Plan** resolves each selected stop's `stopId` (now on the read shape — see below —
-  else a `getStop` fallback) and calls `insertStops(creds, targetLoadId, stopIds)` once.
-  **Unplan** groups the selection by current `loadNbr` and calls `removeStops` per load
-  (`load/edit` full-header echo). After either, it refetches stops and clears selection.
+  `latLngInBounds`, `boxFromCorners`, `stopKey`) — ported from davis-nuvizz. Screen-pixel→
+  LatLng uses an invisible `OverlayView.getProjection()` (`fromContainerPixelToLatLng`,
+  exact even when tilted). The draw overlay is `src/components/SelectionDraw.jsx`.
+- `<PlanBar>` (left): selection tally (skids/loose/weight), inline UAT creds bar when
+  missing (`useWriteCreds` → sessionStorage `dd_write_creds`, shared with Builder), a
+  **target-load** `<select>`, and **Plan →** / **Unplan** buttons.
+- `<RoutingPanel>` (right rail): **Stops** tab = sortable table of the selection
+  (`useSortableTable` + `SortableTh`) with per-row remove; **Loads** tab = the day's loads
+  (click one to set the Plan target).
+- **Plan** resolves each selected stop's `stopId` (now on the read shape — below — else a
+  `getStop` fallback) and calls `insertStops(creds, targetLoadId, stopIds)` once. **Unplan**
+  groups the selection by current `loadNbr` and calls `removeStops` per load (`load/edit`
+  full-header echo). Both refetch stops + clear selection after.
 - **`stopId` on the read shape:** `normalizeStop` in `netlify/functions/lib/nuvizz.cjs`
   now emits `stopId`, so map stops carry it and plan/unplan needs no extra reads.
-- Selection keys on `loadNbr|stopNbr` (`stopKey`) since coords aren't unique. Marker
-  rebuild (on filter change) and selection restyle are separate effects so toggling a
-  selection never re-fits the map; both read plan state via refs to avoid rebuild churn.
+- Selection keys on `loadNbr|stopNbr` (`stopKey`). Marker rebuild (on data change) and
+  selection restyle are separate effects so toggling never re-fits the map; both read
+  selection via a ref to avoid rebuild churn. Shared colours: `src/lib/statusColors.js`.
 
 ## Print manifest (v0.6.1)
 
