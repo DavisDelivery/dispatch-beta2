@@ -109,6 +109,26 @@ env knobs, all defaulting to current prod behaviour:
 - `NUVIZZ_SCAN_IGNORE_DATE=true` = keep every load found in range (UAT test loads
   are Draft/Cancelled with no today date; otherwise the date filter hides them)
 
+## No scans + call counter (v0.17.0) — local-first
+
+The app no longer scans NuVizz. The only API calls are the user's write actions
+(create order, plan/insertStops, unplan/removeStops), each through the write fn.
+- **Scans OFF.** `discoverLoads` (`lib/nuvizz.cjs`) returns `[]` unless
+  `NUVIZZ_ALLOW_SCANS==='true'`, so `getFleet/getFleetStops/getDriver` are cache-only
+  (empty on a cold cache — the broad board pages show empty; that's intended). The
+  `fleet-refresh-background.mjs` cron schedule was REMOVED (no more `*/5min` scan).
+- **Call counter** (`netlify/functions/lib/callCounter.cjs`) — modeled on davis-nuvizz's
+  `nuvizz_ops`: every upstream NuVizz round-trip is counted at the write fn's `nuvizz()`
+  chokepoint into a Blobs key `calls:<ET-day>` `{ count, byRoute, byHour }` (ET-day key
+  = implicit daily reset; Blobs read-modify-write since no atomic increment). Ceiling
+  `NUVIZZ_DAILY_CEILING` (default 1000), mode `NUVIZZ_BREAKER_MODE` (monitor default).
+  Exposed by the GET `nuvizz-ops` fn (Blobs only — never calls NuVizz). The topbar
+  `<CallCounter>` pill ("API N / ceiling (mode)") polls it + refreshes on the
+  `dd-api-call` event that `nuvizzWrite.call()` fires after every write.
+- **Known loads** (`src/lib/loads.js`, `KNOWN_LOADS`) — the hardcoded loads the Routing
+  board targets, so no discovery read. `loadId` is optional; if absent Routing resolves
+  it once via `getLoad` on first Plan and caches it (`localStorage dd_loadid_cache`).
+
 ## Created-orders registry (v0.15.0)
 
 `src/lib/createdOrders.js` (+ `useCreatedOrders` hook) — a localStorage list
@@ -139,42 +159,25 @@ plan/unplan lives on `/routing` (links there from the header).
   init is a no-op; refs dropped on unmount so a remount re-creates.
 - Mock mode: fixture stops have lat/lng, so the map renders without credentials.
 
-## Routing page (v0.16.0) — watchlist plan/unplan (UAT, no read-fn dependency)
+## Routing page (v0.17.0) — local-first plan/unplan
 
-`/routing` — dedicated workspace mirroring the davis-nuvizz Routing layout: **left
-controls · center map · right Orders/Selected/Loads rail** (`.routing__grid`; on mobile the
-map stacks first via grid-areas). The board is **driven entirely by the gated write
-function** (`getLoad`/`getStop`/`insertStops`/`removeStops`; UAT-only, `NUVIZZ_WRITE_ENABLED`)
-— **no read function / scan / mock**. So it works on UAT as soon as creds are entered,
-independent of any read-fn redeploy. Phase 1 = plan/unplan; route optimizer is the next layer.
-- **Board = created orders + watched loads.** `useWatchedLoads` (localStorage
-  `dd_watched_loads`) is the set of load #s on the board; any load an order is planned onto
-  is auto-watched. Each watched load is read live: `getLoad` → its stops, each enriched by
-  `getStop` (name/city/coords, so they can map + be selected). Refetched after every action.
-- **Select** stops: click a marker to toggle; **＋ In view** (map bounds); **▱ Box**
-  (drag); **⬠ Lasso** (draw). Selected markers enlarge + gain a light ring; Esc cancels.
-- Geometry is the pure, tested `src/lib/routingSelect.js` (`pointInPolygon`,
-  `latLngInBounds`, `boxFromCorners`, `stopKey`) — ported from davis-nuvizz. Screen-pixel→
-  LatLng uses an invisible `OverlayView.getProjection()` (`fromContainerPixelToLatLng`,
-  exact even when tilted). The draw overlay is `src/components/SelectionDraw.jsx`.
-- **Two selectable sources** funnel into one selection: (1) **created orders** (Orders tab;
-  carry their `stopId`) and (2) **watched-load stops** (Loads tab + map markers, when
-  geocoded). Keys: orders `order|stopNbr`, load stops `load|loadNbr|stopNbr`. Box/lasso/
-  in-view select geocoded markers; the geometry is the pure `src/lib/routingSelect.js`.
-- `<PlanBar>` (left): selection tally, inline UAT creds bar when missing (`useWriteCreds` →
-  sessionStorage `dd_write_creds`, shared with Builder), a **typeable target-load** field
-  (datalist of watched loads, but any UAT load # works), and **Plan →** / **Unplan**.
-- `<RoutingPanel>` (right rail): **Orders** tab = created-orders registry (checkboxes);
-  **Selected** tab = sortable table of the selection with remove; **Loads** tab = the
-  watchlist — add a load #, see its live stops, check stops to unplan/move, click the
-  header to set the Plan target, × to stop watching.
-- **Plan** resolves the target load # → `loadId` (from a watched load, else `getLoad`),
-  `insertStops` the selection's `stopId`s once, marks planned orders + auto-watches the
-  target. **Unplan** groups by current load and `removeStops` per load. Both refetch the
-  watched loads (`tick`) and clear the selection.
-- Selection keys on `loadNbr|stopNbr` (`stopKey`). Marker rebuild (on data change) and
-  selection restyle are separate effects so toggling never re-fits the map; both read
-  selection via a ref to avoid rebuild churn. Shared colours: `src/lib/statusColors.js`.
+`/routing` — a **local-first** plan/unplan workspace (`.routing__grid--nomap`: left
+controls · right Orders/Selected/Loads rail; no map, since we hold no coordinates without
+a read). The board is built **entirely from local state** — the created-orders registry +
+the hardcoded `KNOWN_LOADS` — so it makes **zero** API calls until you Plan or Unplan.
+- **Orders tab** = the created-orders registry (checkboxes; each carries its `stopId`).
+  **Selected** = sortable table of the selection. **Loads** = `KNOWN_LOADS` + any load our
+  orders are planned onto, with a count of our orders on each; click to set the Plan target.
+- `<PlanBar>` (left): tally, inline UAT creds (`useWriteCreds`), a **typeable target-load**
+  field (datalist of known loads, any UAT load # works), and **Plan →** / **Unplan**.
+- **Plan** = resolve target `loadId` (from `KNOWN_LOADS`, else the `dd_loadid_cache`, else
+  one `getLoad` cached forever) → `insertStops(loadId, stopIds)` → mark orders planned in the
+  registry. **Unplan** = group selected planned orders by `loadNbr` → `removeStops` per load →
+  mark unplanned. No refetch (the registry is the source of truth). Every call hits the
+  counter pill.
+- Created orders carry `stopId` from their create response, so Plan/Unplan need **no**
+  `getStop`. (The earlier map/watchlist/box-lasso version is gone; `SelectionDraw`,
+  `useWatchedLoads`, `statusColors` remain in the tree but are unused by `/routing` now.)
 
 ## Print manifest (v0.6.1)
 

@@ -1380,6 +1380,17 @@ button, input, select { font: inherit; color: inherit; }
   }
 }
 
+/* Local-first layout (no map): controls + rail only. */
+.routing__grid--nomap { grid-template-areas: 'controls' 'rail'; }
+@media (min-width: 768px) {
+  .routing__grid--nomap {
+    grid-template-columns: 340px minmax(0, 1fr);
+    grid-template-areas: 'controls rail';
+    align-items: start;
+  }
+}
+.routing__grid--nomap .routing__panel { max-height: calc(100dvh - var(--topbar-h) - 44px - 120px); }
+
 .routing__section-title {
   font-size: 0.72rem;
   text-transform: uppercase;
@@ -1485,6 +1496,28 @@ button, input, select { font: inherit; color: inherit; }
   padding: 1px 7px;
 }
 .routing__order-tag.is-planned { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+
+/* NuVizz API call-counter pill (topbar) */
+.topbar__right { display: flex; align-items: center; gap: 10px; }
+.callcounter {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.callcounter strong { color: var(--text); font-size: 0.78rem; }
+.callcounter__cap { color: var(--text-dim); }
+.callcounter__mode { color: var(--text-dim); opacity: 0.8; margin-left: 2px; }
+.callcounter.is-amber { border-color: #b45309; color: #fbbf24; }
+.callcounter.is-amber strong { color: #fbbf24; }
+.callcounter.is-red { border-color: #b91c1c; color: #fb7185; }
+.callcounter.is-red strong { color: #fb7185; }
 
 /* Watchlist (Loads tab) */
 .routing__watch { padding: 4px; }

@@ -1,8 +1,9 @@
-// Right rail for the Routing page: Orders / Selected / Loads tabs.
-//  - Orders:   the created-orders registry; check to select for planning.
-//  - Selected: the current selection (orders + load stops), with per-row remove.
-//  - Loads:    the watchlist — add a load #, see its live stops (getLoad/getStop);
-//              check stops to unplan/move, click the header to set the Plan target.
+// Right rail for the Routing page: Orders / Selected / Loads tabs. Fully local —
+// no API reads here.
+//  - Orders:   the created-orders registry; check to select for plan/unplan.
+//  - Selected: the current selection, with per-row remove.
+//  - Loads:    the known loads (src/lib/loads.js) + any load our orders are on;
+//              click one to set the Plan target. The count is our planned orders.
 // Presentational — all state lives in the Routing page.
 
 import { useMemo } from 'react'
@@ -57,7 +58,7 @@ function StopsTable({ stops, onRemove }) {
     [stops],
   )
   const { sortedItems, sortKey, sortDirection, requestSort } = useSortableTable(rows, { initialKey: 'name', types: COL_TYPES })
-  if (!rows.length) return <p className="routing__empty">Nothing selected. Check orders (Orders) or load stops (Loads).</p>
+  if (!rows.length) return <p className="routing__empty">Nothing selected. Check orders in the Orders tab.</p>
   return (
     <table className="routing__tbl">
       <thead>
@@ -88,82 +89,32 @@ function StopsTable({ stops, onRemove }) {
   )
 }
 
-function WatchList({ watchedLoads, watchInput, setWatchInput, onWatch, onUnwatch, selectedKeys, onToggleStop, targetLoad, setTargetLoad, loadStopKey }) {
+function LoadsList({ loads, targetLoad, setTargetLoad }) {
+  if (!loads.length) return <p className="routing__empty">No known loads. Add them to src/lib/loads.js, or type a load # in Target load #.</p>
   return (
-    <div className="routing__watch">
-      <div className="routing__watch-add">
-        <input
-          value={watchInput}
-          onChange={(e) => setWatchInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && onWatch()}
-          placeholder="Watch a load # (e.g. LOAD000112225)"
-          autoComplete="off"
-        />
-        <button type="button" className="wb-btn wb-btn--sm" onClick={onWatch} disabled={!watchInput.trim()}>Watch</button>
-      </div>
-
-      {watchedLoads.length === 0 && <p className="routing__empty">No loads watched. Add a UAT load # above to pull it onto the board.</p>}
-
-      {watchedLoads.map((l) => {
-        const isTarget = targetLoad === l.loadNbr
-        return (
-          <div key={l.loadNbr} className="routing__wload">
-            <div className={`routing__wload-head ${isTarget ? 'is-target' : ''}`}>
-              <button type="button" className="routing__wload-name" onClick={() => setTargetLoad(isTarget ? '' : l.loadNbr)} title="Set as Plan target">
-                {l.routeName || l.loadNbr}
-                <span className="routing__wload-sub">
-                  {l.loadNbr}
-                  {l.loading ? ' · loading…' : l.error ? ` · ${l.error}` : ` · ${(l.stops || []).length} stop(s)${l.status ? ' · ' + l.status : ''}`}
-                  {isTarget ? ' · TARGET' : ''}
-                </span>
-              </button>
-              <button type="button" className="routing__x" title="Stop watching" onClick={() => onUnwatch(l.loadNbr)}>×</button>
-            </div>
-            {(l.stops || []).length > 0 && (
-              <ul className="routing__wstops">
-                {l.stops.map((s) => {
-                  const key = loadStopKey(l.loadNbr, s.stopNbr)
-                  const checked = selectedKeys.has(key)
-                  return (
-                    <li key={s.stopNbr}>
-                      <label className={`routing__wstop ${checked ? 'is-sel' : ''}`}>
-                        <input type="checkbox" checked={checked} onChange={() => onToggleStop(key)} />
-                        <span className="routing__wstop-seq">{s.stopSeq ?? '—'}</span>
-                        <span className="routing__wstop-main">
-                          <span>{s.name || s.stopNbr}</span>
-                          {(s.city || s.stopNbr !== (s.name || s.stopNbr)) && <span className="routing__wstop-meta">{s.city ? `${s.city}${s.state ? ', ' + s.state : ''} · ` : ''}{s.stopNbr}</span>}
-                        </span>
-                      </label>
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-          </div>
-        )
-      })}
-    </div>
+    <ul className="routing__loads">
+      {loads.map((l) => (
+        <li key={l.loadNbr}>
+          <button
+            type="button"
+            className={`routing__load ${targetLoad === l.loadNbr ? 'is-target' : ''}`}
+            onClick={() => setTargetLoad(targetLoad === l.loadNbr ? '' : l.loadNbr)}
+            title="Set as the Plan target"
+          >
+            <span className="routing__load-name">{l.routeName || l.loadNbr}</span>
+            <span className="routing__load-meta">
+              {l.loadNbr}
+              {l.stopCount ? ` · ${l.stopCount} of our order(s)` : ''}
+            </span>
+            {targetLoad === l.loadNbr && <span className="routing__load-target">target</span>}
+          </button>
+        </li>
+      ))}
+    </ul>
   )
 }
 
-export default function RoutingPanel({
-  tab,
-  setTab,
-  orders,
-  selectedKeys,
-  onToggleOrder,
-  stops,
-  onRemove,
-  watchedLoads,
-  watchInput,
-  setWatchInput,
-  onWatch,
-  onUnwatch,
-  onToggleStop,
-  targetLoad,
-  setTargetLoad,
-  loadStopKey,
-}) {
+export default function RoutingPanel({ tab, setTab, orders, selectedKeys, onToggleOrder, stops, onRemove, loads, targetLoad, setTargetLoad }) {
   return (
     <aside className="routing__rail">
       <div className="routing__tabs" role="tablist">
@@ -174,26 +125,13 @@ export default function RoutingPanel({
           Selected <span className="filterchip__n">{stops.length}</span>
         </button>
         <button type="button" role="tab" aria-selected={tab === 'loads'} className={`routing__tab ${tab === 'loads' ? 'is-active' : ''}`} onClick={() => setTab('loads')}>
-          Loads <span className="filterchip__n">{watchedLoads.length}</span>
+          Loads <span className="filterchip__n">{loads.length}</span>
         </button>
       </div>
       <div className="routing__panel">
         {tab === 'orders' && <OrdersList orders={orders} selectedKeys={selectedKeys} onToggle={onToggleOrder} />}
         {tab === 'stops' && <StopsTable stops={stops} onRemove={onRemove} />}
-        {tab === 'loads' && (
-          <WatchList
-            watchedLoads={watchedLoads}
-            watchInput={watchInput}
-            setWatchInput={setWatchInput}
-            onWatch={onWatch}
-            onUnwatch={onUnwatch}
-            selectedKeys={selectedKeys}
-            onToggleStop={onToggleStop}
-            targetLoad={targetLoad}
-            setTargetLoad={setTargetLoad}
-            loadStopKey={loadStopKey}
-          />
-        )}
+        {tab === 'loads' && <LoadsList loads={loads} targetLoad={targetLoad} setTargetLoad={setTargetLoad} />}
       </div>
     </aside>
   )

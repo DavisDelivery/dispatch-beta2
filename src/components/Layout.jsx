@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import BuildBadge from './BuildBadge.jsx'
+import CallCounter from './CallCounter.jsx'
 import DateNav from './DateNav.jsx'
 
 // Primary nav — rail order mirrors NuVizz's Transport group.
@@ -95,7 +96,10 @@ export default function Layout() {
           <span className="topbar__mark" aria-hidden="true">▦</span>
           <span className="topbar__title">Davis Dispatch</span>
         </div>
-        <BuildBadge />
+        <div className="topbar__right">
+          <CallCounter />
+          <BuildBadge />
+        </div>
       </header>
 
       <DateNav />

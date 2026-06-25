@@ -363,6 +363,11 @@ async function scanRange(cfg, lo, hi, targetDate) {
 }
 
 async function discoverLoads(cfg, targetDate) {
+  // SCANS ARE OFF by default (v0.17.0 — local-first, no API scanning). A scan is
+  // the only thing here that hits NuVizz, so unless explicitly re-enabled we make
+  // ZERO calls and return nothing; reads become cache-only (empty on a cold cache).
+  if (process.env.NUVIZZ_ALLOW_SCANS !== 'true') return []
+
   let lo
   let hi
   // Fixed-range mode (UAT): scan exactly NUVIZZ_SCAN_MIN..MAX, no date-center
