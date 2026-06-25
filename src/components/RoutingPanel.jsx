@@ -1,5 +1,7 @@
-// Right rail for the Routing page: a tabbed Stops / Loads panel.
-//  - Stops: a sortable table of the currently-selected stops, with per-row remove.
+// Right rail for the Routing page: Orders / Stops / Loads tabs.
+//  - Orders: the created-orders registry (what we made in UAT); check to select
+//    for planning. Shows planned/unplanned status.
+//  - Stops: the current selection (orders + any map stops), with per-row remove.
 //  - Loads: the day's loads; click one to set it as the Plan target.
 // Presentational — all state lives in the Routing page.
 
@@ -10,11 +12,43 @@ import { stopKey } from '../lib/routingSelect.js'
 
 const COL_TYPES = { name: 'text', city: 'text', skids: 'number', pcs: 'number', wt: 'number' }
 
+function OrdersList({ orders, selectedKeys, onToggle }) {
+  if (!orders.length)
+    return <p className="routing__empty">No created orders yet. Make orders on the Builder screen — they appear here to plan.</p>
+  return (
+    <ul className="routing__orders">
+      {orders.map((o) => {
+        const key = `order|${o.stopNbr}`
+        const checked = selectedKeys.has(key)
+        return (
+          <li key={o.stopNbr}>
+            <label className={`routing__order ${checked ? 'is-sel' : ''}`}>
+              <input type="checkbox" checked={checked} onChange={() => onToggle(key)} />
+              <span className="routing__order-main">
+                <span className="routing__order-name">{o.name || o.stopNbr}</span>
+                <span className="routing__order-meta">
+                  {o.stopNbr}
+                  {o.city ? ` · ${o.city}${o.state ? ', ' + o.state : ''}` : ''}
+                </span>
+              </span>
+              {o.plannedLoadNbr ? (
+                <span className="routing__order-tag is-planned" title={o.plannedLoadNbr}>on {o.plannedLoadNbr}</span>
+              ) : (
+                <span className="routing__order-tag">unplanned</span>
+              )}
+            </label>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
 function StopsTable({ stops, onRemove }) {
   const rows = useMemo(
     () =>
       stops.map((v) => ({
-        key: stopKey(v.stop),
+        key: v.key,
         name: v.stop.name || '—',
         city: v.stop.city || '',
         skids: v.stop.totalPallets || 0,
@@ -28,7 +62,7 @@ function StopsTable({ stops, onRemove }) {
     types: COL_TYPES,
   })
 
-  if (!rows.length) return <p className="routing__empty">No stops selected yet. Use the tools on the map.</p>
+  if (!rows.length) return <p className="routing__empty">Nothing selected. Check orders (Orders tab) or click map stops.</p>
 
   return (
     <table className="routing__tbl">
@@ -63,7 +97,7 @@ function StopsTable({ stops, onRemove }) {
 }
 
 function LoadsList({ loads, targetLoad, setTargetLoad }) {
-  if (!loads.length) return <p className="routing__empty">No loads for this day.</p>
+  if (!loads.length) return <p className="routing__empty">No loads listed for this day. Type the load # in the Target field.</p>
   return (
     <ul className="routing__loads">
       {loads.map((l) => (
@@ -87,23 +121,35 @@ function LoadsList({ loads, targetLoad, setTargetLoad }) {
   )
 }
 
-export default function RoutingPanel({ tab, setTab, stops, onRemove, loads, targetLoad, setTargetLoad }) {
+export default function RoutingPanel({
+  tab,
+  setTab,
+  orders,
+  selectedKeys,
+  onToggleOrder,
+  stops,
+  onRemove,
+  loads,
+  targetLoad,
+  setTargetLoad,
+}) {
   return (
     <aside className="routing__rail">
       <div className="routing__tabs" role="tablist">
+        <button type="button" role="tab" aria-selected={tab === 'orders'} className={`routing__tab ${tab === 'orders' ? 'is-active' : ''}`} onClick={() => setTab('orders')}>
+          Orders <span className="filterchip__n">{orders.length}</span>
+        </button>
         <button type="button" role="tab" aria-selected={tab === 'stops'} className={`routing__tab ${tab === 'stops' ? 'is-active' : ''}`} onClick={() => setTab('stops')}>
-          Stops <span className="filterchip__n">{stops.length}</span>
+          Selected <span className="filterchip__n">{stops.length}</span>
         </button>
         <button type="button" role="tab" aria-selected={tab === 'loads'} className={`routing__tab ${tab === 'loads' ? 'is-active' : ''}`} onClick={() => setTab('loads')}>
           Loads <span className="filterchip__n">{loads.length}</span>
         </button>
       </div>
       <div className="routing__panel">
-        {tab === 'stops' ? (
-          <StopsTable stops={stops} onRemove={onRemove} />
-        ) : (
-          <LoadsList loads={loads} targetLoad={targetLoad} setTargetLoad={setTargetLoad} />
-        )}
+        {tab === 'orders' && <OrdersList orders={orders} selectedKeys={selectedKeys} onToggle={onToggleOrder} />}
+        {tab === 'stops' && <StopsTable stops={stops} onRemove={onRemove} />}
+        {tab === 'loads' && <LoadsList loads={loads} targetLoad={targetLoad} setTargetLoad={setTargetLoad} />}
       </div>
     </aside>
   )

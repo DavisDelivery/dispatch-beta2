@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { fetchDriver, IS_MOCK } from '../lib/nuvizzApi.js'
+import { fetchDriver } from '../lib/nuvizzApi.js'
 import { buildStopView, formatUSD } from '../lib/stopView.js'
 import { formatDate, formatTime, formatNumber } from '../lib/format.js'
 import { useSelectedDate } from '../hooks/useSelectedDate.js'
@@ -106,7 +106,6 @@ export default function Driver() {
       <div className="stops__head">
         <h1 className="page__title driver__title">
           {state.status === 'ready' ? driverName : userName}
-          {IS_MOCK && <span className="pill pill--mock">Mock data</span>}
         </h1>
         <p className="stops__count">
           {state.status === 'ready' ? (

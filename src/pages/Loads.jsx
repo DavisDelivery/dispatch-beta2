@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { fetchFleet, fetchLoadDetail, IS_MOCK } from '../lib/nuvizzApi.js'
+import { fetchFleet, fetchLoadDetail } from '../lib/nuvizzApi.js'
 import {
   LOAD_COLUMNS,
   LOAD_COLUMN_TYPES,
@@ -93,7 +93,6 @@ export default function Loads() {
       <div className="stops__head">
         <h1 className="page__title">
           Loads
-          {IS_MOCK && <span className="pill pill--mock">Mock data</span>}
         </h1>
         <p className="stops__count">
           {state.status === 'ready' ? (

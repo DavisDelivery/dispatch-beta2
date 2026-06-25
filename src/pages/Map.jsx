@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
-import { fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
+import { fetchFleetStops } from '../lib/nuvizzApi.js'
 import { buildStopView, STATUS_FILTERS, matchesStatusFilter } from '../lib/stopView.js'
 import { markerColor, LEGEND_ENTRIES } from '../lib/statusColors.js'
 import { formatDate, formatTime } from '../lib/format.js'
@@ -246,7 +246,6 @@ export default function MapPage() {
       <div className="map__head">
         <h1 className="page__title">
           Map
-          {IS_MOCK && <span className="pill pill--mock">Mock data</span>}
           <Link to="/routing" className="map__build-link" title="Plan / unplan orders on the map">
             ⤳ Routing
           </Link>

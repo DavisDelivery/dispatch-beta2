@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { fetchFleet, fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
+import { fetchFleet, fetchFleetStops } from '../lib/nuvizzApi.js'
 import { buildStopView } from '../lib/stopView.js'
 import { formatUSD } from '../lib/stopView.js'
 import { formatDate } from '../lib/format.js'
@@ -89,7 +89,6 @@ export default function Dashboard() {
       <div className="stops__head">
         <h1 className="page__title">
           Dashboard
-          {IS_MOCK && <span className="pill pill--mock">Mock data</span>}
         </h1>
         <p className="stops__count">
           {fleet.status === 'ready' ? <FreshnessStamp meta={fleet.meta} /> : <>&nbsp;</>} · {dayLabel}

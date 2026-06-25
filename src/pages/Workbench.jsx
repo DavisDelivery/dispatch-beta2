@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
+import { fetchFleetStops } from '../lib/nuvizzApi.js'
 import { buildDriverGroups, matchesGroupSearch } from '../lib/workbenchModel.js'
 import { formatTime, formatNumber, formatDate } from '../lib/format.js'
 import { useSortableTable } from '../hooks/useSortableTable.js'
@@ -214,7 +214,6 @@ export default function Workbench() {
       <div className="stops__head">
         <h1 className="page__title">
           Route Workbench
-          {IS_MOCK && <span className="pill pill--mock">Mock data</span>}
         </h1>
         <p className="stops__count">
           {state.status === 'ready' ? (
