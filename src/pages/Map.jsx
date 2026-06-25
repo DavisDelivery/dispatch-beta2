@@ -1,14 +1,19 @@
 // Map page — plots the selected day's stops on a Google Map, with Street View.
-// Read-only; no write paths. Status + driver filters; date-driven.
+// READ-ONLY by default. "Plan mode" (gated, UAT-only) adds box/lasso/in-view
+// multi-select and Plan / Unplan actions that drive the NuVizz write function.
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { fetchFleetStops, IS_MOCK } from '../lib/nuvizzApi.js'
 import { buildStopView, statusBucket, STATUS_FILTERS, matchesStatusFilter } from '../lib/stopView.js'
+import { getStop, insertStops, removeStops, normalizeStop, summarize } from '../lib/nuvizzWrite.js'
+import { pointInPolygon, latLngInBounds, boxFromCorners, stopKey } from '../lib/routingSelect.js'
 import { formatDate, formatTime } from '../lib/format.js'
 import { useSelectedDate } from '../hooks/useSelectedDate.js'
+import { useWriteCreds } from '../hooks/useWriteCreds.js'
 import FreshnessStamp from '../components/FreshnessStamp.jsx'
+import PlanBar from '../components/PlanBar.jsx'
 import { loadGoogleMaps } from '../lib/googleMaps.js'
 import { MarkerClusterer } from '@googlemaps/markerclusterer'
 
@@ -39,6 +44,18 @@ function weekdayFull(iso) {
 
 function markerColor(stop) {
   return STATUS_COLORS[statusBucket(stop)] ?? STATUS_COLORS.Other
+}
+
+// Google marker symbol for a stop — enlarged + light-ringed when selected.
+function iconFor(api, view, selected) {
+  return {
+    path: api.SymbolPath.CIRCLE,
+    scale: selected ? 7.5 : 5,
+    fillColor: markerColor(view.stop),
+    fillOpacity: selected ? 1 : 0.9,
+    strokeColor: selected ? '#f8fafc' : '#0b1220',
+    strokeWeight: selected ? 2.5 : 1,
+  }
 }
 
 const esc = (s) =>
@@ -90,6 +107,108 @@ const FLAG_FILTERS = [
   { key: 'unflagged', label: 'Unflagged', test: (v) => v.chips.length === 0 },
 ]
 
+// ---------------------------------------------------------------------------
+// Box / lasso drawing overlay — only mounted while a draw tool is armed. It
+// captures pointer events over the canvas, converts screen pixels to LatLng via
+// the parent-supplied projection, then runs the pure enclosure tests.
+// ---------------------------------------------------------------------------
+function SelectionDraw({ mode, project, candidates, onCommit, onCancel }) {
+  const [box, setBox] = useState(null) // {x0,y0,x1,y1} px
+  const [path, setPath] = useState([]) // [{x,y}] px
+  const drawing = useRef(false)
+  const ptsRef = useRef([])
+  const startRef = useRef(null)
+
+  const rel = (e) => {
+    const r = e.currentTarget.getBoundingClientRect()
+    return { x: e.clientX - r.left, y: e.clientY - r.top }
+  }
+
+  const down = (e) => {
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+    drawing.current = true
+    const p = rel(e)
+    if (mode === 'box') {
+      startRef.current = p
+      setBox({ x0: p.x, y0: p.y, x1: p.x, y1: p.y })
+    } else {
+      ptsRef.current = [p]
+      setPath([p])
+    }
+  }
+
+  const move = (e) => {
+    if (!drawing.current) return
+    const p = rel(e)
+    if (mode === 'box') {
+      const s = startRef.current
+      setBox({ x0: s.x, y0: s.y, x1: p.x, y1: p.y })
+    } else {
+      const last = ptsRef.current[ptsRef.current.length - 1]
+      if (!last || Math.hypot(p.x - last.x, p.y - last.y) > 4) {
+        ptsRef.current.push(p)
+        setPath(ptsRef.current.slice())
+      }
+    }
+  }
+
+  const up = (e) => {
+    if (!drawing.current) return
+    drawing.current = false
+    if (mode === 'box') {
+      const s = startRef.current
+      const p = rel(e)
+      setBox(null)
+      if (Math.abs(p.x - s.x) < 4 && Math.abs(p.y - s.y) < 4) return onCancel()
+      const a = project(s.x, s.y)
+      const b = project(p.x, p.y)
+      if (!a || !b) return onCancel()
+      const bx = boxFromCorners(a, b)
+      onCommit(
+        candidates.filter((v) => latLngInBounds(v.stop.latitude, v.stop.longitude, bx)).map((v) => stopKey(v.stop)),
+      )
+    } else {
+      const pts = ptsRef.current.slice()
+      setPath([])
+      if (pts.length < 3) return onCancel()
+      const poly = pts.map((q) => project(q.x, q.y)).filter(Boolean).map((ll) => [ll.lat, ll.lng])
+      if (poly.length < 3) return onCancel()
+      onCommit(
+        candidates.filter((v) => pointInPolygon(v.stop.latitude, v.stop.longitude, poly)).map((v) => stopKey(v.stop)),
+      )
+    }
+  }
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onCancel()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onCancel])
+
+  return (
+    <div className="map__draw" onPointerDown={down} onPointerMove={move} onPointerUp={up}>
+      {mode === 'box' && box && (
+        <div
+          className="map__box"
+          style={{
+            left: Math.min(box.x0, box.x1),
+            top: Math.min(box.y0, box.y1),
+            width: Math.abs(box.x1 - box.x0),
+            height: Math.abs(box.y1 - box.y0),
+          }}
+        />
+      )}
+      {mode === 'lasso' && path.length > 1 && (
+        <svg className="map__lasso">
+          <polyline points={path.map((p) => `${p.x},${p.y}`).join(' ')} />
+        </svg>
+      )}
+    </div>
+  )
+}
+
 export default function MapPage() {
   const { date } = useSelectedDate()
   const [state, setState] = useState({ status: 'loading', stops: [], meta: null, error: '' })
@@ -99,11 +218,30 @@ export default function MapPage() {
   // 'loading' | 'ready' | 'error' for the Google Maps script itself.
   const [maps, setMaps] = useState({ status: API_KEY ? 'loading' : 'error', api: null, error: API_KEY ? '' : 'No Google Maps API key configured.' })
 
+  // ---- Plan mode (gated write) ----
+  const { creds, setCreds, canWrite } = useWriteCreds()
+  const [planMode, setPlanMode] = useState(false)
+  const [selectMode, setSelectMode] = useState(null) // null | 'box' | 'lasso'
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set())
+  const [targetLoad, setTargetLoad] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null) // { text, ok }
+
   const mapElRef = useRef(null)
   const mapRef = useRef(null)
   const markersRef = useRef([])
+  const markerByKeyRef = useRef(new Map())
   const infoRef = useRef(null)
   const clustererRef = useRef(null)
+  const projectionRef = useRef(null)
+
+  // Refs let the marker effects read current plan state without rebuilding on
+  // every toggle (which would re-fit the map and clobber the selection icons).
+  const planModeRef = useRef(planMode)
+  planModeRef.current = planMode
+  const selectedKeysRef = useRef(selectedKeys)
+  selectedKeysRef.current = selectedKeys
+  const handleMarkerClickRef = useRef(() => {})
 
   // ---- Load the Google Maps script once ----
   useEffect(() => {
@@ -137,12 +275,21 @@ export default function MapPage() {
     infoRef.current = new api.InfoWindow()
     // Cluster dense markers; clusters expand as you zoom (handles 600+ stops).
     clustererRef.current = new MarkerClusterer({ map })
+    // Invisible overlay purely to expose the exact pixel<->LatLng projection
+    // used by the box/lasso tools (works even when tilted, unlike bounds-lerp).
+    const projOv = new api.OverlayView()
+    projOv.onAdd = projOv.draw = projOv.onRemove = () => {}
+    projOv.setMap(map)
+    projectionRef.current = projOv
     mapRef.current = map
     return () => {
       // No explicit destroy for google.maps.Map; drop refs so a remount re-creates.
       if (clustererRef.current) clustererRef.current.clearMarkers()
+      if (projectionRef.current) projectionRef.current.setMap(null)
+      markerByKeyRef.current.clear()
       markersRef.current = []
       clustererRef.current = null
+      projectionRef.current = null
       mapRef.current = null
       infoRef.current = null
     }
@@ -155,6 +302,8 @@ export default function MapPage() {
     setStatusFilter('All')
     setDriverFilter('All')
     setFlagFilters({})
+    setSelectedKeys(new Set())
+    setMsg(null)
     fetchFleetStops({ date })
       .then((res) => {
         if (!cancelled)
@@ -168,6 +317,12 @@ export default function MapPage() {
     }
   }, [date])
 
+  // Refetch stops after a write, preserving filters (no full-page loading flash).
+  const refresh = useCallback(async () => {
+    const res = await fetchFleetStops({ date })
+    setState({ status: 'ready', stops: res.stops, meta: { source: res.source, cachedAt: res.cachedAt, mock: res.mock }, error: '' })
+  }, [date])
+
   const allViews = useMemo(
     () => (state.status === 'ready' ? state.stops.map(buildStopView) : []),
     [state.stops, state.status],
@@ -177,6 +332,16 @@ export default function MapPage() {
     [allViews],
   )
   const driverList = useMemo(() => buildDriverList(allViews), [allViews])
+  // Distinct loads for the Plan target picker (every stop carries loadId/loadNbr).
+  const loadsList = useMemo(() => {
+    const m = new Map()
+    for (const { stop } of allViews) {
+      if (stop.loadNbr && !m.has(stop.loadNbr)) {
+        m.set(stop.loadNbr, { loadNbr: stop.loadNbr, loadId: stop.loadId, routeName: stop.routeName, driverUserName: stop.driverUserName })
+      }
+    }
+    return Array.from(m.values()).sort((a, b) => (a.routeName || a.loadNbr).localeCompare(b.routeName || b.loadNbr))
+  }, [allViews])
   const statusCounts = useMemo(() => {
     const counts = {}
     for (const f of STATUS_FILTERS) counts[f] = mappedViews.filter((v) => matchesStatusFilter(v, f)).length
@@ -200,6 +365,38 @@ export default function MapPage() {
     [mappedViews, statusFilter, driverFilter, flagFilters],
   )
 
+  // Selected stops (across ALL mapped stops, so the tally survives filtering).
+  const selectedStops = useMemo(
+    () => mappedViews.filter((v) => selectedKeys.has(stopKey(v.stop))),
+    [mappedViews, selectedKeys],
+  )
+  const tally = useMemo(() => {
+    let skids = 0
+    let pieces = 0
+    let weight = 0
+    for (const { stop } of selectedStops) {
+      skids += stop.totalPallets || 0
+      pieces += stop.totalCartons || 0
+      weight += stop.weight || 0
+    }
+    return { skids, pieces, weight }
+  }, [selectedStops])
+
+  // Keep the marker click handler current (plan-toggle vs popup) without rebuild.
+  handleMarkerClickRef.current = (view, marker, openStreetView) => {
+    if (planModeRef.current) {
+      setSelectedKeys((prev) => {
+        const next = new Set(prev)
+        const k = stopKey(view.stop)
+        next.has(k) ? next.delete(k) : next.add(k)
+        return next
+      })
+    } else {
+      infoRef.current.setContent(popupNode(view, openStreetView))
+      infoRef.current.open({ map: mapRef.current, anchor: marker })
+    }
+  }
+
   // ---- (Re)build markers when the filtered set or the map changes ----
   useEffect(() => {
     const map = mapRef.current
@@ -207,7 +404,6 @@ export default function MapPage() {
     const clusterer = clustererRef.current
     if (!map || !api || !clusterer) return
 
-    // Open Street View at a position (the map's embedded panorama).
     const openStreetView = (lat, lng) => {
       const pano = map.getStreetView()
       pano.setPosition({ lat, lng })
@@ -215,37 +411,27 @@ export default function MapPage() {
       pano.setVisible(true)
     }
 
-    // Clear old markers from the clusterer.
     clusterer.clearMarkers()
-
+    const byKey = new Map()
     const markers = []
     const bounds = new api.LatLngBounds()
     for (const view of filteredViews) {
       const { stop } = view
+      const key = stopKey(stop)
       const pos = { lat: stop.latitude, lng: stop.longitude }
-      const color = markerColor(stop)
-      // No `map` here — the clusterer adds/removes markers from the map.
       const marker = new api.Marker({
         position: pos,
         title: stop.name || '',
-        icon: {
-          path: api.SymbolPath.CIRCLE,
-          scale: 5,
-          fillColor: color,
-          fillOpacity: 0.9,
-          strokeColor: '#0b1220',
-          strokeWeight: 1,
-        },
+        icon: iconFor(api, view, selectedKeysRef.current.has(key)),
       })
-      marker.addListener('click', () => {
-        infoRef.current.setContent(popupNode(view, openStreetView))
-        infoRef.current.open({ map, anchor: marker })
-      })
+      marker.addListener('click', () => handleMarkerClickRef.current(view, marker, openStreetView))
       markers.push(marker)
+      byKey.set(key, { marker, view })
       bounds.extend(pos)
     }
     clusterer.addMarkers(markers)
     markersRef.current = markers
+    markerByKeyRef.current = byKey
 
     if (filteredViews.length === 1) {
       map.setCenter(bounds.getCenter())
@@ -255,9 +441,136 @@ export default function MapPage() {
     }
   }, [filteredViews, maps.status])
 
+  // ---- Restyle markers on selection change — no rebuild, no re-fit ----
+  useEffect(() => {
+    const api = maps.api
+    if (!api) return
+    for (const [key, rec] of markerByKeyRef.current) {
+      rec.marker.setIcon(iconFor(api, rec.view, selectedKeys.has(key)))
+    }
+  }, [selectedKeys, maps.status])
+
+  // ---- Selection / plan actions ----
+  const project = useCallback(
+    (x, y) => {
+      const proj = projectionRef.current?.getProjection?.()
+      const api = maps.api
+      if (!proj || !api) return null
+      const ll = proj.fromContainerPixelToLatLng(new api.Point(x, y))
+      return ll ? { lat: ll.lat(), lng: ll.lng() } : null
+    },
+    [maps.api],
+  )
+
+  const mergeSelection = useCallback((keys) => {
+    if (!keys.length) return
+    setSelectedKeys((prev) => new Set([...prev, ...keys]))
+  }, [])
+
+  const addInView = useCallback(() => {
+    const map = mapRef.current
+    if (!map) return
+    const b = map.getBounds()
+    if (!b) return
+    const ne = b.getNorthEast()
+    const sw = b.getSouthWest()
+    const box = { north: ne.lat(), south: sw.lat(), east: ne.lng(), west: sw.lng() }
+    mergeSelection(
+      filteredViews.filter((v) => latLngInBounds(v.stop.latitude, v.stop.longitude, box)).map((v) => stopKey(v.stop)),
+    )
+  }, [filteredViews, mergeSelection])
+
+  const togglePlanMode = () => {
+    setPlanMode((p) => {
+      const next = !p
+      if (!next) {
+        setSelectMode(null)
+        setSelectedKeys(new Set())
+        setMsg(null)
+      } else if (infoRef.current) {
+        infoRef.current.close()
+      }
+      return next
+    })
+  }
+
+  // Resolve a NuVizz stopId for a read-stop (present after the normalizer change;
+  // falls back to a getStop read for any stop missing it).
+  const resolveStopId = useCallback(
+    async (stop) => {
+      if (stop.stopId) return stop.stopId
+      const r = await getStop(creds, stop.stopNbr)
+      return normalizeStop(r).stopId
+    },
+    [creds],
+  )
+
+  const onPlan = useCallback(async () => {
+    const target = loadsList.find((l) => l.loadNbr === targetLoad)
+    if (!target?.loadId) {
+      setMsg({ text: 'Pick a target load first.', ok: false })
+      return
+    }
+    setBusy(true)
+    setMsg(null)
+    try {
+      const ids = []
+      for (const { stop } of selectedStops) {
+        const id = await resolveStopId(stop)
+        if (id) ids.push(id)
+      }
+      if (!ids.length) throw new Error('No resolvable stop IDs in the selection.')
+      const s = summarize(await insertStops(creds, target.loadId, ids))
+      if (!s.ok) throw new Error(s.message)
+      setMsg({ text: `Planned ${ids.length} stop(s) onto ${target.routeName || target.loadNbr}.`, ok: true })
+      await refresh()
+      setSelectedKeys(new Set())
+    } catch (e) {
+      setMsg({ text: e.message, ok: false })
+    } finally {
+      setBusy(false)
+    }
+  }, [creds, loadsList, targetLoad, selectedStops, resolveStopId, refresh])
+
+  const onUnplan = useCallback(async () => {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const byLoad = new Map() // loadNbr -> stopId[]
+      for (const { stop } of selectedStops) {
+        if (!stop.loadNbr) continue
+        const id = await resolveStopId(stop)
+        if (!id) continue
+        if (!byLoad.has(stop.loadNbr)) byLoad.set(stop.loadNbr, [])
+        byLoad.get(stop.loadNbr).push(id)
+      }
+      if (!byLoad.size) throw new Error('No resolvable stops to unplan.')
+      let total = 0
+      const failures = []
+      for (const [loadNbr, ids] of byLoad) {
+        if (!ids.length) continue
+        const s = summarize(await removeStops(creds, loadNbr, ids))
+        if (s.ok) total += ids.length
+        else failures.push(`${loadNbr}: ${s.message}`)
+      }
+      setMsg(
+        failures.length
+          ? { text: `Unplanned ${total}; errors — ${failures.join(' · ')}`, ok: false }
+          : { text: `Unplanned ${total} stop(s).`, ok: true },
+      )
+      await refresh()
+      setSelectedKeys(new Set())
+    } catch (e) {
+      setMsg({ text: e.message, ok: false })
+    } finally {
+      setBusy(false)
+    }
+  }, [creds, selectedStops, resolveStopId, refresh])
+
   const mappedCount = mappedViews.length
   const unmappedCount = allViews.length - mappedCount
   const visibleCount = filteredViews.length
+  const selectedCount = selectedKeys.size
   const isFiltered =
     statusFilter !== 'All' || driverFilter !== 'All' || FLAG_FILTERS.some((f) => flagFilters[f.key])
   const fullDayLabel = `${weekdayFull(date)}, ${formatDate(date + 'T12:00:00Z')}`
@@ -325,26 +638,81 @@ export default function MapPage() {
         </div>
       )}
 
-      {/* Driver filter */}
-      {state.status === 'ready' && driverList.length > 0 && (
+      {/* Driver filter + Plan-mode toggle */}
+      {state.status === 'ready' && (
         <div className="map__driver-row">
-          <span className="map__driver-label">Driver</span>
-          <div className="control control--select map__driver-select">
-            <select
-              id="map-driver-filter"
-              value={driverFilter}
-              onChange={(e) => setDriverFilter(e.target.value)}
-              aria-label="Filter by driver"
-            >
-              <option value="All">All drivers ({driverList.length})</option>
-              {driverList.map(({ value, label }) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </div>
+          {driverList.length > 0 && (
+            <>
+              <span className="map__driver-label">Driver</span>
+              <div className="control control--select map__driver-select">
+                <select
+                  id="map-driver-filter"
+                  value={driverFilter}
+                  onChange={(e) => setDriverFilter(e.target.value)}
+                  aria-label="Filter by driver"
+                >
+                  <option value="All">All drivers ({driverList.length})</option>
+                  {driverList.map(({ value, label }) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
+          <button
+            type="button"
+            className={`wb-btn wb-btn--sm map__plan-toggle ${planMode ? 'is-active' : ''}`}
+            aria-pressed={planMode}
+            onClick={togglePlanMode}
+          >
+            {planMode ? '✓ Plan mode' : '✋ Plan mode'}
+          </button>
         </div>
+      )}
+
+      {/* Plan-mode tools + action bar */}
+      {state.status === 'ready' && planMode && (
+        <>
+          <div className="map__tools">
+            <button type="button" className="wb-btn wb-btn--sm" onClick={addInView}>
+              ＋ In view
+            </button>
+            <button
+              type="button"
+              className={`wb-btn wb-btn--sm ${selectMode === 'box' ? 'is-active' : ''}`}
+              onClick={() => setSelectMode((m) => (m === 'box' ? null : 'box'))}
+            >
+              ▱ Box
+            </button>
+            <button
+              type="button"
+              className={`wb-btn wb-btn--sm ${selectMode === 'lasso' ? 'is-active' : ''}`}
+              onClick={() => setSelectMode((m) => (m === 'lasso' ? null : 'lasso'))}
+            >
+              ⬠ Lasso
+            </button>
+            {selectMode && <span className="map__tools-hint">{selectMode === 'box' ? 'Drag a box' : 'Draw around stops'} · Esc to cancel</span>}
+          </div>
+          <PlanBar
+            count={selectedCount}
+            tally={tally}
+            loads={loadsList}
+            targetLoad={targetLoad}
+            setTargetLoad={setTargetLoad}
+            onPlan={onPlan}
+            onUnplan={onUnplan}
+            onClear={() => setSelectedKeys(new Set())}
+            busy={busy}
+            msg={msg?.text}
+            msgOk={msg?.ok}
+            creds={creds}
+            setCreds={setCreds}
+            canWrite={canWrite}
+            isMock={IS_MOCK}
+          />
+        </>
       )}
 
       {/* Legend */}
@@ -373,6 +741,18 @@ export default function MapPage() {
           <div className="map__empty">No stops match the current filters.</div>
         )}
         <div ref={mapElRef} className="map__canvas" aria-label="Stop locations map" />
+        {planMode && selectMode && maps.status === 'ready' && (
+          <SelectionDraw
+            mode={selectMode}
+            project={project}
+            candidates={filteredViews}
+            onCommit={(keys) => {
+              mergeSelection(keys)
+              setSelectMode(null)
+            }}
+            onCancel={() => setSelectMode(null)}
+          />
+        )}
       </div>
     </section>
   )

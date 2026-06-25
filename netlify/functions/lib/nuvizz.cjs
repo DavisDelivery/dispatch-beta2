@@ -234,6 +234,7 @@ function normalizeStop(load, entry) {
     driverName: str(load?.loadAssignment?.driverName),
     driverUserName: str(load?.loadAssignment?.driverUserName),
 
+    stopId: str(stop.stopId),
     stopNbr: str(stop.stopNbr),
     stopType: str(stop.stopType),
     bol: str(stop.bol),
