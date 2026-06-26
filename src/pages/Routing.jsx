@@ -47,7 +47,7 @@ const loadIdCache = {
 
 export default function RoutingPage() {
   const { date } = useSelectedDate()
-  const { creds, setCreds, canWrite } = useWriteCreds()
+  const { creds } = useWriteCreds()
   const { orders, setPlanned } = useCreatedOrders()
 
   const [selectedKeys, setSelectedKeys] = useState(() => new Set())
@@ -215,9 +215,6 @@ export default function RoutingPage() {
             busy={busy}
             msg={msg?.text}
             msgOk={msg?.ok}
-            creds={creds}
-            setCreds={setCreds}
-            canWrite={canWrite}
           />
         </div>
 

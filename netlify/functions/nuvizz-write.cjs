@@ -113,10 +113,17 @@ exports.handler = async (event) => {
     return json(400, { error: 'Invalid JSON body' })
   }
 
-  const { op, companyCode, username, password } = req
+  const { op } = req
   if (!op) return json(400, { error: 'Missing op' })
+
+  // Credentials come from server env (UAT) by default so the UI never has to
+  // collect them; a request MAY still override any field. Set on Netlify as
+  // NUVIZZ_DAVIS_COMPANY_CODE / NUVIZZ_DAVIS_USER / NUVIZZ_DAVIS_PASS.
+  const companyCode = req.companyCode || process.env.NUVIZZ_DAVIS_COMPANY_CODE
+  const username = req.username || process.env.NUVIZZ_DAVIS_USER
+  const password = req.password || process.env.NUVIZZ_DAVIS_PASS
   if (!companyCode || !username || !password) {
-    return json(400, { error: 'Missing credentials (companyCode, username, password)' })
+    return json(500, { error: 'Server is not configured with UAT credentials (NUVIZZ_DAVIS_*).' })
   }
   // Defensive: this surface is UAT-only by base URL; also reject obvious prod tenants.
   if (String(companyCode).toUpperCase() === 'DAVIS') {

@@ -7,7 +7,7 @@
 // Credentials are entered here and held only in the browser (sessionStorage);
 // they are never bundled or stored on the server. The function forwards them.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   buildStopPayload,
   createOrder,
@@ -21,7 +21,6 @@ import {
 } from '../lib/nuvizzWrite.js'
 import { useCreatedOrders } from '../hooks/useCreatedOrders.js'
 
-const CREDS_KEY = 'dd_write_creds'
 const SETTINGS_KEY = 'dd_write_settings'
 
 const load = (k, fallback) => {
@@ -90,32 +89,6 @@ function parseDelimited(text) {
     })
     return row
   })
-}
-
-function CredsBar({ creds, setCreds }) {
-  const set = (k) => (e) => setCreds((p) => ({ ...p, [k]: e.target.value }))
-  return (
-    <div className="card wb-card">
-      <h2 className="wb-card__title">UAT credentials</h2>
-      <div className="wb-grid wb-grid--4">
-        <label className="wb-field">
-          <span>Company code</span>
-          <input value={creds.companyCode} onChange={set('companyCode')} autoComplete="off" />
-        </label>
-        <label className="wb-field">
-          <span>Username</span>
-          <input value={creds.username} onChange={set('username')} autoComplete="off" />
-        </label>
-        <label className="wb-field">
-          <span>Password</span>
-          <input type="password" value={creds.password} onChange={set('password')} autoComplete="off" />
-        </label>
-      </div>
-      <p className="wb-hint">
-        Held only in this browser tab (sessionStorage) — never stored on the server. UAT tenant only.
-      </p>
-    </div>
-  )
 }
 
 function SettingsBar({ settings, setSettings }) {
@@ -417,7 +390,9 @@ function CreatedOrdersPanel({ orders, remove, clear }) {
 
 export default function Builder() {
   const { orders, add, remove, clear } = useCreatedOrders()
-  const [creds, setCreds] = useState(() => load(CREDS_KEY, { companyCode: 'DAVISV5', username: '', password: '' }))
+  // Credentials now come from server env (UAT) — the UI no longer collects them.
+  const creds = {}
+  const canWrite = true
   const [settings, setSettings] = useState(() =>
     load(SETTINGS_KEY, {
       originName: 'ULINEUAT',
@@ -430,13 +405,7 @@ export default function Builder() {
     }),
   )
 
-  useEffect(() => save(CREDS_KEY, creds), [creds])
   useEffect(() => save(SETTINGS_KEY, settings), [settings])
-
-  const canWrite = useMemo(
-    () => Boolean(creds.companyCode && creds.username && creds.password),
-    [creds],
-  )
 
   return (
     <section className="page page--builder">
@@ -449,9 +418,7 @@ export default function Builder() {
         </p>
       </div>
 
-      <CredsBar creds={creds} setCreds={setCreds} />
       <SettingsBar settings={settings} setSettings={setSettings} />
-      {!canWrite && <p className="wb-msg wb-msg--err">Enter UAT credentials above to enable writes.</p>}
       <CreateOrders creds={creds} settings={settings} canWrite={canWrite} onCreated={add} />
       <CreatedOrdersPanel orders={orders} remove={remove} clear={clear} />
       <LoadAssembly creds={creds} canWrite={canWrite} />
