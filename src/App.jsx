@@ -1,5 +1,6 @@
 import { Routes, Route } from 'react-router-dom'
-import Layout from './components/Layout.jsx'
+import AppShell from './components/shell/AppShell.jsx'
+import Dispatch from './pages/Dispatch.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import Workbench from './pages/Workbench.jsx'
 import Loads from './pages/Loads.jsx'
@@ -12,8 +13,9 @@ import Builder from './pages/Builder.jsx'
 export default function App() {
   return (
     <Routes>
-      <Route element={<Layout />}>
+      <Route element={<AppShell />}>
         <Route index element={<Dashboard />} />
+        <Route path="dispatch" element={<Dispatch />} />
         <Route path="workbench" element={<Workbench />} />
         <Route path="loads" element={<Loads />} />
         <Route path="stops" element={<Stops />} />
