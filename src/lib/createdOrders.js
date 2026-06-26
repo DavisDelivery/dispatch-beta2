@@ -6,8 +6,11 @@
 // so planning needs no extra read. A 'dd-created-orders' window event fires on
 // every mutation so same-tab listeners re-render live.
 
+import { SEED_ORDERS, SEED_VERSION } from './seedOrders.js'
+
 const KEY = 'dd_created_orders'
 const EVENT = 'dd-created-orders'
+const SEED_FLAG = 'dd_orders_seeded'
 
 export function getCreatedOrders() {
   try {
@@ -47,6 +50,24 @@ export function setPlannedFor(stopNbrs, loadNbr) {
 
 export function clearCreatedOrders() {
   write([])
+}
+
+// One-time merge of the starter orders into the registry. Runs once per browser
+// (flag = SEED_VERSION) so deleting a seeded order won't bring it back, and a new
+// seed batch (bumped SEED_VERSION) re-applies. Only adds stopNbrs not present.
+export function seedCreatedOrders() {
+  try {
+    if (localStorage.getItem(SEED_FLAG) === SEED_VERSION) return
+    const have = new Set(getCreatedOrders().map((o) => o.stopNbr))
+    const list = getCreatedOrders()
+    for (const o of SEED_ORDERS) {
+      if (!have.has(o.stopNbr)) list.push({ plannedLoadNbr: null, createdAt: Date.now(), ...o })
+    }
+    write(list)
+    localStorage.setItem(SEED_FLAG, SEED_VERSION)
+  } catch {
+    /* storage disabled — skip seeding */
+  }
 }
 
 export const CREATED_ORDERS_EVENT = EVENT
