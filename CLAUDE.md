@@ -80,6 +80,26 @@ netlify/functions/
 public/test-fixtures/ # nuvizz-today-loads.json (mock-mode fixture: loads+stops)
 ```
 
+## TMS UI overhaul (v0.19.0) — design system + app shell
+
+The UI is being rebuilt into a premium TMS cockpit (see `docs/TMS.md` for the brief).
+Stack stays Vite/React/Netlify — **all NuVizz wiring is kept**. Added **Tailwind**
+(`tailwind.config.js`, preflight OFF so it coexists with the legacy `index.css` during
+the incremental reskin), a token theme (`src/styles/theme.css`, HSL vars, dark-first +
+`.light`), **Inter**, **lucide-react** icons, **cmdk**.
+- `src/ui/` — design-system primitives (Button, Badge, Card, Kbd) using the `cn()` helper
+  (`src/lib/cn.js` = clsx + tailwind-merge) + token colors (`bg-card`, `text-muted-foreground`…).
+- `src/components/shell/` — `AppShell` (replaces `Layout`): `Sidebar` (grouped nav +
+  "coming soon" items, `nav.js`), `Topbar` (title · ⌘K search · theme toggle · CallCounter
+  · BuildBadge), `CommandPalette` (⌘K → navigate + actions), `ThemeProvider` (dark/light,
+  localStorage `dd_theme`). Legacy pages render inside the new frame unchanged; `DateNav`
+  still shows on the legacy date routes.
+- `src/pages/Dispatch.jsx` (`/dispatch`) — flagship first pass: KPI strip + unassigned
+  queue + load lanes, plan/unplan via `usePlanning` (`src/hooks/usePlanning.js`, the shared
+  plan/unplan + loadId-cache logic; API touched only on plan/unplan). Drag-and-drop + map next.
+- Reskin is incremental: new screens use the design system; legacy pages get migrated
+  page-by-page, then `index.css` retires.
+
 ## Warm cache (v0.2.1)
 
 The ~600-load range scan is OFF the request path. `fleet-refresh-background.mjs`
