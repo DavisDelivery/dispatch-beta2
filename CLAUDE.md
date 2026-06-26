@@ -58,8 +58,8 @@ src/
   lib/                # format, dateNav (+ tests), parseStopComments(.ts) + tests,
                       #   stopView, loadsModel, workbenchModel, nuvizzApi,
                       #   csv (+ tests) — escapeCsvField, toCsv, stopsToCsv, downloadCsv
-  hooks/              # useSortableTable, useSelectedDate, useWriteCreds (shared
-                      #   UAT creds in sessionStorage 'dd_write_creds')
+  hooks/              # useSortableTable, useSelectedDate, useWriteCreds (no-op now:
+                      #   write creds come from server env, UI never collects them)
   pages/              # Dashboard, Loads, Stops, Workbench, Driver, Map (all built)
                       #   Driver (/driver/:userName) — focused single-driver day view:
                       #     loads + ordered stop sequence via fetchDriver; reachable from
@@ -128,6 +128,16 @@ The app no longer scans NuVizz. The only API calls are the user's write actions
 - **Known loads** (`src/lib/loads.js`, `KNOWN_LOADS`) — the hardcoded loads the Routing
   board targets, so no discovery read. `loadId` is optional; if absent Routing resolves
   it once via `getLoad` on first Plan and caches it (`localStorage dd_loadid_cache`).
+
+## Server-side write creds (v0.18.0)
+
+The write fn (`nuvizz-write.cjs`) no longer requires per-request credentials — it
+falls back to server env `NUVIZZ_DAVIS_COMPANY_CODE` / `NUVIZZ_DAVIS_USER` /
+`NUVIZZ_DAVIS_PASS` (already set on Netlify; production = the UAT `DAVISV5` tenant).
+A request MAY still override any field, but the UI never collects creds: `useWriteCreds`
+is a no-op (`canWrite: true`, empty creds), and the Builder/PlanBar creds bars are gone.
+Trade-off: the public site can now trigger UAT writes with no creds — acceptable for a
+gated (`NUVIZZ_WRITE_ENABLED`) UAT-only beta; add Netlify visitor password if that matters.
 
 ## Created-orders registry (v0.15.0)
 
