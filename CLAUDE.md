@@ -94,9 +94,12 @@ the incremental reskin), a token theme (`src/styles/theme.css`, HSL vars, dark-f
   · BuildBadge), `CommandPalette` (⌘K → navigate + actions), `ThemeProvider` (dark/light,
   localStorage `dd_theme`). Legacy pages render inside the new frame unchanged; `DateNav`
   still shows on the legacy date routes.
-- `src/pages/Dispatch.jsx` (`/dispatch`) — flagship first pass: KPI strip + unassigned
-  queue + load lanes, plan/unplan via `usePlanning` (`src/hooks/usePlanning.js`, the shared
-  plan/unplan + loadId-cache logic; API touched only on plan/unplan). Drag-and-drop + map next.
+- `src/pages/Dispatch.jsx` (`/dispatch`) — flagship: KPI strip + **Board / Map** views over one
+  shared selection. Board = unassigned queue + load lanes with **native drag-and-drop** (drag an
+  order onto a lane = plan / move; onto Unassigned = unplan). Map = `components/dispatch/DispatchMap.jsx`
+  (Google markers, amber=unassigned/blue=planned, click to select). Coords come from `useGeocode`
+  (`src/hooks/useGeocode.js` — client-side Google Geocoder, cached in `dd_geocode_cache`; NOT a NuVizz
+  call). Plan/unplan via `usePlanning` (`src/hooks/usePlanning.js`); API touched only on plan/unplan.
 - Reskin is incremental: new screens use the design system; legacy pages get migrated
   page-by-page, then `index.css` retires.
 
