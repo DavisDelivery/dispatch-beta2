@@ -1,8 +1,9 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { PackagePlus, Truck, Inbox, ArrowRight, X, CheckCircle2, AlertCircle, Package, LayoutGrid, Map as MapIcon, GripVertical } from 'lucide-react'
 import { usePlanning } from '../hooks/usePlanning.js'
 import { useGeocode } from '../hooks/useGeocode.js'
+import { useBoardDrag } from '../hooks/useBoardDrag.js'
 import { KNOWN_LOADS } from '../lib/loads.js'
 import DispatchMap from '../components/dispatch/DispatchMap.jsx'
 import Button from '../ui/Button.jsx'
@@ -31,8 +32,6 @@ export default function Dispatch() {
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState(null)
   const [view, setView] = useState('board')
-  const [hover, setHover] = useState(null)
-  const dragRef = useRef(null)
 
   const unassigned = useMemo(() => orders.filter((o) => !o.plannedLoadNbr), [orders])
   const lanes = useMemo(() => {
@@ -56,6 +55,7 @@ export default function Dispatch() {
       return next
     })
   const clearSel = () => setSel(new Set())
+  const selectMany = (stopNbrs) => setSel((prev) => new Set([...prev, ...stopNbrs]))
 
   // Plan the selected orders onto `target` (moving any already planned elsewhere).
   const doPlan = async () => {
@@ -79,13 +79,10 @@ export default function Dispatch() {
     setBusy(false)
   }
 
-  // Drag-and-drop: move a single dragged order.
-  const onDrop = async (loadNbr) => {
-    const o = dragRef.current
-    dragRef.current = null
-    setHover(null)
+  // Drag-and-drop (mouse + touch): move a single dragged order to a dropzone.
+  const onDrop = async (zoneId, o) => {
     if (!o) return
-    if (loadNbr === '__unassigned') {
+    if (zoneId === '__unassigned') {
       if (o.plannedLoadNbr) {
         setBusy(true)
         setToast(await unplan([o]))
@@ -93,30 +90,14 @@ export default function Dispatch() {
       }
       return
     }
-    if (o.plannedLoadNbr === loadNbr) return
+    if (o.plannedLoadNbr === zoneId) return
     setBusy(true)
     setToast(null)
     if (o.plannedLoadNbr) await unplan([o])
-    setToast(await plan(loadNbr, [o]))
+    setToast(await plan(zoneId, [o]))
     setBusy(false)
   }
-
-  const dragProps = (order) => ({
-    draggable: true,
-    onDragStart: () => (dragRef.current = order),
-    onDragEnd: () => {
-      dragRef.current = null
-      setHover(null)
-    },
-  })
-  const dropProps = (loadNbr) => ({
-    onDragOver: (e) => {
-      e.preventDefault()
-      setHover(loadNbr)
-    },
-    onDragLeave: () => setHover((h) => (h === loadNbr ? null : h)),
-    onDrop: () => onDrop(loadNbr),
-  })
+  const { drag, zone, start } = useBoardDrag(onDrop)
 
   return (
     <div className="mx-auto max-w-[1600px] p-4 md:p-6">
@@ -190,10 +171,10 @@ export default function Dispatch() {
       {view === 'board' && (
         <div className="mt-5 grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
           <section
-            {...dropProps('__unassigned')}
+            data-dropzone="__unassigned"
             className={cn(
               'flex max-h-[calc(100dvh-260px)] flex-col rounded-xl border bg-card shadow-soft transition-colors',
-              hover === '__unassigned' ? 'border-warning/60 ring-2 ring-warning/30' : 'border-border',
+              zone === '__unassigned' ? 'border-warning/60 ring-2 ring-warning/30' : 'border-border',
             )}
           >
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
@@ -214,7 +195,7 @@ export default function Dispatch() {
                 </div>
               )}
               {unassigned.map((o) => (
-                <OrderCard key={o.stopNbr} order={o} selected={sel.has(o.stopNbr)} onClick={() => toggle(o.stopNbr)} dragProps={dragProps(o)} />
+                <OrderCard key={o.stopNbr} order={o} selected={sel.has(o.stopNbr)} onClick={() => toggle(o.stopNbr)} onHandleDown={start(o)} dragging={drag?.order.stopNbr === o.stopNbr} />
               ))}
             </div>
           </section>
@@ -223,10 +204,10 @@ export default function Dispatch() {
             {lanes.map((lane) => (
               <div
                 key={lane.loadNbr}
-                {...dropProps(lane.loadNbr)}
+                data-dropzone={lane.loadNbr}
                 className={cn(
                   'flex flex-col rounded-xl border bg-card shadow-soft transition-colors',
-                  hover === lane.loadNbr ? 'border-primary/60 ring-2 ring-primary/30' : 'border-border',
+                  zone === lane.loadNbr ? 'border-primary/60 ring-2 ring-primary/30' : 'border-border',
                 )}
               >
                 <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
@@ -250,7 +231,8 @@ export default function Dispatch() {
                       planned
                       selected={sel.has(o.stopNbr)}
                       onClick={() => toggle(o.stopNbr)}
-                      dragProps={dragProps(o)}
+                      onHandleDown={start(o)}
+                      dragging={drag?.order.stopNbr === o.stopNbr}
                       unplanOne={async () => {
                         setBusy(true)
                         setToast(await unplan([o]))
@@ -280,25 +262,42 @@ export default function Dispatch() {
             </div>
           </section>
           <div className="h-[calc(100dvh-260px)]">
-            <DispatchMap orders={orders} coords={coords} selected={sel} onToggle={toggle} />
+            <DispatchMap orders={orders} coords={coords} selected={sel} onToggle={toggle} onSelectMany={selectMany} />
           </div>
+        </div>
+      )}
+
+      {/* Drag ghost (follows the pointer on mouse + touch) */}
+      {drag && (
+        <div
+          className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-primary/50 bg-card px-3 py-2 text-sm font-medium text-foreground shadow-pop"
+          style={{ left: drag.x, top: drag.y }}
+        >
+          {drag.order.name || drag.order.stopNbr}
         </div>
       )}
     </div>
   )
 }
 
-function OrderCard({ order, planned, selected, onClick, dragProps, unplanOne, noDrag, mapped }) {
+function OrderCard({ order, planned, selected, onClick, onHandleDown, dragging, unplanOne, noDrag, mapped }) {
   return (
     <div
-      {...(noDrag ? {} : dragProps)}
       className={cn(
         'group flex items-center gap-2 rounded-lg border px-2.5 py-2 transition-colors',
         selected ? 'border-primary/50 bg-primary/10' : 'border-transparent bg-background hover:bg-accent',
-        !noDrag && 'cursor-grab active:cursor-grabbing',
+        dragging && 'opacity-40',
       )}
     >
-      {!noDrag && <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground" />}
+      {!noDrag && (
+        <span
+          onPointerDown={onHandleDown}
+          className="-ml-1 grid shrink-0 cursor-grab touch-none place-items-center py-1 pl-1 pr-0.5 text-muted-foreground/40 hover:text-muted-foreground active:cursor-grabbing"
+          title="Drag to a load"
+        >
+          <GripVertical className="h-4 w-4" />
+        </span>
+      )}
       <button type="button" onClick={onClick} className="focus-ring flex min-w-0 flex-1 items-center gap-2 text-left">
         <span className={cn('grid h-4 w-4 shrink-0 place-items-center rounded border', selected ? 'border-primary bg-primary text-primary-foreground' : 'border-border-strong')}>
           {selected && <CheckCircle2 className="h-3 w-3" />}
