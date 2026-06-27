@@ -164,10 +164,19 @@ is a no-op (`canWrite: true`, empty creds), and the Builder/PlanBar creds bars a
 Trade-off: the public site can now trigger UAT writes with no creds — acceptable for a
 gated (`NUVIZZ_WRITE_ENABLED`) UAT-only beta; add Netlify visitor password if that matters.
 
-## Created-orders registry (v0.15.0)
+## Created-orders registry (v0.23.0 — server-backed, cross-device)
 
-`src/lib/createdOrders.js` (+ `useCreatedOrders` hook) — a localStorage list
-(`dd_created_orders`) of orders we've created in UAT, each carrying its `stopId`.
+The registry now **syncs across devices**: Netlify Blobs is the source of truth via
+`netlify/functions/orders.cjs` (GET → list; POST `{op}` add/remove/setPlanned/merge/clear,
+each a read-modify-write returning the canonical list; seeds the starter orders on first
+read). `src/lib/createdOrders.js` keeps a localStorage **mirror** (`dd_created_orders`) for
+instant render + offline, mutates it optimistically, then POSTs the op and reconciles to the
+server's list. `useCreatedOrders` syncs on mount (one-time `merge` of any pre-existing local
+orders up, flagged `dd_orders_synced`), then refreshes on window focus + a 20s interval so a
+change made on one device shows on another. (Earlier this was localStorage-only / per-browser.)
+
+`src/lib/createdOrders.js` (+ `useCreatedOrders` hook) — the list of orders we've created in
+UAT, each carrying its `stopId`.
 The **Builder** appends to it on every successful create and shows the list
 (`CreatedOrdersPanel`). The **Routing** page reads it (Orders tab) so created
 orders are selectable to plan onto a load with no extra read. Planning/unplanning

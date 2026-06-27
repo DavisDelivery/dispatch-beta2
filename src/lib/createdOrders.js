@@ -1,73 +1,97 @@
-// Registry of orders we've created in UAT — the bridge between the Builder
-// (which creates them) and the Routing screen (which plans/unplans them).
-//
-// Persisted in localStorage so it survives reloads and is shared across the
-// app's pages/tabs. Each entry carries the stopId (needed for insert/remove),
-// so planning needs no extra read. A 'dd-created-orders' window event fires on
-// every mutation so same-tab listeners re-render live.
-
-import { SEED_ORDERS, SEED_VERSION } from './seedOrders.js'
+// Created-orders registry — now SERVER-BACKED so the board follows you across
+// devices. Netlify Blobs is the source of truth (via /.netlify/functions/orders);
+// localStorage is a local mirror for instant render + offline. Mutations update
+// the mirror optimistically, then POST the op and reconcile to the canonical list
+// the server returns. A 'dd-created-orders' window event fires on every change.
 
 const KEY = 'dd_created_orders'
 const EVENT = 'dd-created-orders'
-const SEED_FLAG = 'dd_orders_seeded'
+const SYNCED_FLAG = 'dd_orders_synced'
+const URL = '/.netlify/functions/orders'
 
-export function getCreatedOrders() {
+function readLocal() {
   try {
-    const arr = JSON.parse(localStorage.getItem(KEY) || '[]')
-    return Array.isArray(arr) ? arr : []
+    const a = JSON.parse(localStorage.getItem(KEY) || '[]')
+    return Array.isArray(a) ? a : []
   } catch {
     return []
   }
 }
 
-function write(list) {
+let cache = readLocal()
+
+function setCache(list) {
+  cache = Array.isArray(list) ? list : []
   try {
-    localStorage.setItem(KEY, JSON.stringify(list))
-    window.dispatchEvent(new Event(EVENT))
+    localStorage.setItem(KEY, JSON.stringify(cache))
   } catch {
-    /* ignore quota / disabled storage */
+    /* ignore */
+  }
+  window.dispatchEvent(new Event(EVENT))
+}
+
+export function getCreatedOrders() {
+  return cache
+}
+
+async function serverOp(body) {
+  try {
+    const res = await fetch(URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    if (res.ok) {
+      const d = await res.json()
+      if (Array.isArray(d.orders)) setCache(d.orders)
+    }
+  } catch {
+    /* offline — keep the optimistic local mirror; a later sync reconciles */
   }
 }
 
-// Add (or refresh) an order by stopNbr. Newest first; de-duped on stopNbr.
+// Pull the canonical list from the server.
+export async function refreshCreatedOrders() {
+  try {
+    const res = await fetch(URL)
+    if (res.ok) {
+      const d = await res.json()
+      if (Array.isArray(d.orders)) setCache(d.orders)
+    }
+  } catch {
+    /* offline */
+  }
+}
+
+// On first load per device: push any pre-existing local orders up once (so work
+// done before sync isn't stranded), then trust the server. Afterwards: refresh.
+export async function syncCreatedOrders() {
+  try {
+    const synced = localStorage.getItem(SYNCED_FLAG) === '1'
+    if (!synced && cache.length) await serverOp({ op: 'merge', orders: cache })
+    else await refreshCreatedOrders()
+    localStorage.setItem(SYNCED_FLAG, '1')
+  } catch {
+    /* ignore */
+  }
+}
+
 export function addCreatedOrder(order) {
   if (!order?.stopNbr) return
-  const list = getCreatedOrders().filter((o) => o.stopNbr !== order.stopNbr)
-  list.unshift({ plannedLoadNbr: null, createdAt: Date.now(), ...order })
-  write(list)
+  setCache([{ plannedLoadNbr: null, createdAt: Date.now(), ...order }, ...cache.filter((o) => o.stopNbr !== order.stopNbr)])
+  serverOp({ op: 'add', order })
 }
 
 export function removeCreatedOrder(stopNbr) {
-  write(getCreatedOrders().filter((o) => o.stopNbr !== stopNbr))
+  setCache(cache.filter((o) => o.stopNbr !== stopNbr))
+  serverOp({ op: 'remove', stopNbr })
 }
 
-// Mark planned (loadNbr set) or unplanned (loadNbr null) for the given stopNbrs.
 export function setPlannedFor(stopNbrs, loadNbr) {
   const set = new Set(stopNbrs)
-  write(getCreatedOrders().map((o) => (set.has(o.stopNbr) ? { ...o, plannedLoadNbr: loadNbr || null } : o)))
+  setCache(cache.map((o) => (set.has(o.stopNbr) ? { ...o, plannedLoadNbr: loadNbr || null } : o)))
+  serverOp({ op: 'setPlanned', stopNbrs, loadNbr })
 }
 
 export function clearCreatedOrders() {
-  write([])
-}
-
-// One-time merge of the starter orders into the registry. Runs once per browser
-// (flag = SEED_VERSION) so deleting a seeded order won't bring it back, and a new
-// seed batch (bumped SEED_VERSION) re-applies. Only adds stopNbrs not present.
-export function seedCreatedOrders() {
-  try {
-    if (localStorage.getItem(SEED_FLAG) === SEED_VERSION) return
-    const have = new Set(getCreatedOrders().map((o) => o.stopNbr))
-    const list = getCreatedOrders()
-    for (const o of SEED_ORDERS) {
-      if (!have.has(o.stopNbr)) list.push({ plannedLoadNbr: null, createdAt: Date.now(), ...o })
-    }
-    write(list)
-    localStorage.setItem(SEED_FLAG, SEED_VERSION)
-  } catch {
-    /* storage disabled — skip seeding */
-  }
+  setCache([])
+  serverOp({ op: 'clear' })
 }
 
 export const CREATED_ORDERS_EVENT = EVENT
