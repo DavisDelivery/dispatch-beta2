@@ -1,8 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { PackagePlus, Truck, Layers, Inbox, ArrowRight, X, CheckCircle2, AlertCircle, Package } from 'lucide-react'
+import { PackagePlus, Truck, Inbox, ArrowRight, X, CheckCircle2, AlertCircle, Package, LayoutGrid, Map as MapIcon, GripVertical } from 'lucide-react'
 import { usePlanning } from '../hooks/usePlanning.js'
+import { useGeocode } from '../hooks/useGeocode.js'
 import { KNOWN_LOADS } from '../lib/loads.js'
+import DispatchMap from '../components/dispatch/DispatchMap.jsx'
 import Button from '../ui/Button.jsx'
 import Badge from '../ui/Badge.jsx'
 import { cn } from '../lib/cn.js'
@@ -23,10 +25,14 @@ function Stat({ icon: Icon, label, value, tone = 'text-foreground' }) {
 
 export default function Dispatch() {
   const { orders, plan, unplan } = usePlanning()
+  const { byStop: coords } = useGeocode(orders)
   const [sel, setSel] = useState(() => new Set())
   const [target, setTarget] = useState('')
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState(null)
+  const [view, setView] = useState('board')
+  const [hover, setHover] = useState(null)
+  const dragRef = useRef(null)
 
   const unassigned = useMemo(() => orders.filter((o) => !o.plannedLoadNbr), [orders])
   const lanes = useMemo(() => {
@@ -41,7 +47,7 @@ export default function Dispatch() {
   }, [orders])
 
   const plannedCount = orders.length - unassigned.length
-  const selectedOrders = unassigned.filter((o) => sel.has(o.stopNbr))
+  const selectedOrders = useMemo(() => orders.filter((o) => sel.has(o.stopNbr)), [orders, sel])
 
   const toggle = (stopNbr) =>
     setSel((prev) => {
@@ -49,36 +55,129 @@ export default function Dispatch() {
       next.has(stopNbr) ? next.delete(stopNbr) : next.add(stopNbr)
       return next
     })
+  const clearSel = () => setSel(new Set())
 
+  // Plan the selected orders onto `target` (moving any already planned elsewhere).
   const doPlan = async () => {
+    if (!target || !selectedOrders.length) return
     setBusy(true)
     setToast(null)
+    const planned = selectedOrders.filter((o) => o.plannedLoadNbr && o.plannedLoadNbr !== target)
+    if (planned.length) await unplan(planned)
     const r = await plan(target, selectedOrders)
     setToast(r)
-    if (r.ok) setSel(new Set())
+    if (r.ok) clearSel()
     setBusy(false)
   }
-  const doUnplan = async (order) => {
+  const doUnplan = async () => {
+    const planned = selectedOrders.filter((o) => o.plannedLoadNbr)
+    if (!planned.length) return
     setBusy(true)
-    const r = await unplan([order])
-    setToast(r)
+    setToast(null)
+    setToast(await unplan(planned))
+    clearSel()
     setBusy(false)
   }
+
+  // Drag-and-drop: move a single dragged order.
+  const onDrop = async (loadNbr) => {
+    const o = dragRef.current
+    dragRef.current = null
+    setHover(null)
+    if (!o) return
+    if (loadNbr === '__unassigned') {
+      if (o.plannedLoadNbr) {
+        setBusy(true)
+        setToast(await unplan([o]))
+        setBusy(false)
+      }
+      return
+    }
+    if (o.plannedLoadNbr === loadNbr) return
+    setBusy(true)
+    setToast(null)
+    if (o.plannedLoadNbr) await unplan([o])
+    setToast(await plan(loadNbr, [o]))
+    setBusy(false)
+  }
+
+  const dragProps = (order) => ({
+    draggable: true,
+    onDragStart: () => (dragRef.current = order),
+    onDragEnd: () => {
+      dragRef.current = null
+      setHover(null)
+    },
+  })
+  const dropProps = (loadNbr) => ({
+    onDragOver: (e) => {
+      e.preventDefault()
+      setHover(loadNbr)
+    },
+    onDragLeave: () => setHover((h) => (h === loadNbr ? null : h)),
+    onDrop: () => onDrop(loadNbr),
+  })
 
   return (
     <div className="mx-auto max-w-[1600px] p-4 md:p-6">
-      {/* KPIs */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat icon={Package} label="Orders" value={orders.length} />
         <Stat icon={Inbox} label="Unassigned" value={unassigned.length} tone={unassigned.length ? 'text-warning' : 'text-foreground'} />
         <Stat icon={CheckCircle2} label="Planned" value={plannedCount} tone={plannedCount ? 'text-success' : 'text-foreground'} />
-        <Stat icon={Layers} label="Loads" value={lanes.length} />
+        <Stat icon={Truck} label="Loads" value={lanes.length} />
+      </div>
+
+      {/* Toolbar: view toggle + selection action bar */}
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
+          {[
+            { id: 'board', label: 'Board', icon: LayoutGrid },
+            { id: 'map', label: 'Map', icon: MapIcon },
+          ].map((v) => (
+            <button
+              key={v.id}
+              type="button"
+              onClick={() => setView(v.id)}
+              className={cn(
+                'focus-ring inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+                view === v.id ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <v.icon className="h-4 w-4" /> {v.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {sel.size > 0 && <Badge tone="primary">{sel.size} selected</Badge>}
+          <select
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            className="focus-ring h-9 rounded-lg border border-border bg-card px-2.5 text-sm text-foreground"
+          >
+            <option value="">Target load…</option>
+            {lanes.map((l) => (
+              <option key={l.loadNbr} value={l.loadNbr}>{l.name} · {l.loadNbr}</option>
+            ))}
+          </select>
+          <Button variant="primary" disabled={busy || !sel.size || !target} onClick={doPlan}>
+            Plan <ArrowRight className="h-4 w-4" />
+          </Button>
+          <Button variant="secondary" disabled={busy || !selectedOrders.some((o) => o.plannedLoadNbr)} onClick={doUnplan}>
+            Unplan
+          </Button>
+          {sel.size > 0 && (
+            <Button variant="ghost" size="icon" onClick={clearSel} title="Clear selection">
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
       {toast && (
         <div
           className={cn(
-            'mt-4 flex items-center gap-2 rounded-lg border px-3 py-2 text-sm animate-slide-up',
+            'mt-3 flex items-center gap-2 rounded-lg border px-3 py-2 text-sm animate-slide-up',
             toast.ok ? 'border-success/30 bg-success/10 text-success' : 'border-destructive/30 bg-destructive/10 text-destructive',
           )}
         >
@@ -87,118 +186,142 @@ export default function Dispatch() {
         </div>
       )}
 
-      <div className="mt-5 grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
-        {/* Unassigned queue */}
-        <section className="flex max-h-[calc(100dvh-220px)] flex-col rounded-xl border border-border bg-card shadow-soft">
-          <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-              <Inbox className="h-4 w-4 text-muted-foreground" /> Unassigned
-              <Badge tone={unassigned.length ? 'warning' : 'neutral'}>{unassigned.length}</Badge>
-            </div>
-            <Link to="/build" className="focus-ring inline-flex items-center gap-1 rounded-md text-xs font-medium text-primary hover:underline">
-              <PackagePlus className="h-3.5 w-3.5" /> New
-            </Link>
-          </div>
-
-          <div className="flex-1 space-y-1.5 overflow-y-auto p-2">
-            {unassigned.length === 0 && (
-              <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
-                <span className="grid h-11 w-11 place-items-center rounded-full bg-muted text-muted-foreground">
-                  <Inbox className="h-5 w-5" />
-                </span>
-                <p className="text-sm text-muted-foreground">Nothing waiting. {orders.length === 0 ? 'Create an order to begin.' : 'All orders are planned.'}</p>
-                {orders.length === 0 && (
-                  <Link to="/build"><Button size="sm" variant="primary" className="mt-1">Create order</Button></Link>
-                )}
-              </div>
+      {/* BOARD */}
+      {view === 'board' && (
+        <div className="mt-5 grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
+          <section
+            {...dropProps('__unassigned')}
+            className={cn(
+              'flex max-h-[calc(100dvh-260px)] flex-col rounded-xl border bg-card shadow-soft transition-colors',
+              hover === '__unassigned' ? 'border-warning/60 ring-2 ring-warning/30' : 'border-border',
             )}
-            {unassigned.map((o) => {
-              const checked = sel.has(o.stopNbr)
-              return (
-                <button
-                  key={o.stopNbr}
-                  type="button"
-                  onClick={() => toggle(o.stopNbr)}
-                  className={cn(
-                    'focus-ring flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors',
-                    checked ? 'border-primary/50 bg-primary/10' : 'border-transparent hover:bg-accent',
-                  )}
-                >
-                  <span className={cn('mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded border', checked ? 'border-primary bg-primary text-primary-foreground' : 'border-border-strong')}>
-                    {checked && <CheckCircle2 className="h-3 w-3" />}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-foreground">{o.name || o.stopNbr}</span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {o.city ? `${o.city}${o.state ? ', ' + o.state : ''} · ` : ''}{o.stopNbr}
-                    </span>
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-
-          {/* Plan action */}
-          <div className="space-y-2 border-t border-border p-3">
-            <select
-              value={target}
-              onChange={(e) => setTarget(e.target.value)}
-              className="focus-ring h-9 w-full rounded-lg border border-border bg-background px-2.5 text-sm text-foreground"
-            >
-              <option value="">Plan onto load…</option>
-              {lanes.map((l) => (
-                <option key={l.loadNbr} value={l.loadNbr}>{l.name} · {l.loadNbr}</option>
-              ))}
-            </select>
-            <Button variant="primary" className="w-full" disabled={busy || !sel.size || !target} onClick={doPlan}>
-              {busy ? 'Working…' : <>Plan {sel.size || ''} <ArrowRight className="h-4 w-4" /></>}
-            </Button>
-          </div>
-        </section>
-
-        {/* Load lanes */}
-        <section className="grid auto-rows-min gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {lanes.map((lane) => (
-            <div key={lane.loadNbr} className="flex flex-col rounded-xl border border-border bg-card shadow-soft">
-              <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
-                    <Truck className="h-4 w-4" strokeWidth={1.9} />
-                  </span>
-                  <div className="min-w-0 leading-tight">
-                    <div className="truncate text-sm font-semibold text-foreground">{lane.name}</div>
-                    <div className="truncate text-[11px] text-muted-foreground">{lane.loadNbr}</div>
-                  </div>
-                </div>
-                <Badge tone={lane.planned.length ? 'primary' : 'neutral'}>{lane.planned.length}</Badge>
+          >
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                <Inbox className="h-4 w-4 text-muted-foreground" /> Unassigned
+                <Badge tone={unassigned.length ? 'warning' : 'neutral'}>{unassigned.length}</Badge>
               </div>
-
-              <div className="min-h-[72px] space-y-1.5 p-2">
-                {lane.planned.length === 0 && (
-                  <div className="px-3 py-5 text-center text-xs text-muted-foreground">Empty — select orders → plan onto this load.</div>
-                )}
-                {lane.planned.map((o) => (
-                  <div key={o.stopNbr} className="group flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-foreground">{o.name || o.stopNbr}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{o.stopNbr}</span>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => doUnplan(o)}
-                      disabled={busy}
-                      title="Unplan"
-                      className="focus-ring grid h-7 w-7 place-items-center rounded-md text-muted-foreground opacity-0 transition hover:bg-destructive/15 hover:text-destructive group-hover:opacity-100 disabled:opacity-30"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
+              <Link to="/build" className="focus-ring inline-flex items-center gap-1 rounded-md text-xs font-medium text-primary hover:underline">
+                <PackagePlus className="h-3.5 w-3.5" /> New
+              </Link>
             </div>
-          ))}
-        </section>
-      </div>
+            <div className="flex-1 space-y-1.5 overflow-y-auto p-2">
+              {unassigned.length === 0 && (
+                <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
+                  <span className="grid h-11 w-11 place-items-center rounded-full bg-muted text-muted-foreground"><Inbox className="h-5 w-5" /></span>
+                  <p className="text-sm text-muted-foreground">{orders.length === 0 ? 'Create an order to begin.' : 'All orders are planned.'}</p>
+                  {orders.length === 0 && <Link to="/build"><Button size="sm" variant="primary" className="mt-1">Create order</Button></Link>}
+                </div>
+              )}
+              {unassigned.map((o) => (
+                <OrderCard key={o.stopNbr} order={o} selected={sel.has(o.stopNbr)} onClick={() => toggle(o.stopNbr)} dragProps={dragProps(o)} />
+              ))}
+            </div>
+          </section>
+
+          <section className="grid auto-rows-min gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {lanes.map((lane) => (
+              <div
+                key={lane.loadNbr}
+                {...dropProps(lane.loadNbr)}
+                className={cn(
+                  'flex flex-col rounded-xl border bg-card shadow-soft transition-colors',
+                  hover === lane.loadNbr ? 'border-primary/60 ring-2 ring-primary/30' : 'border-border',
+                )}
+              >
+                <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground"><Truck className="h-4 w-4" strokeWidth={1.9} /></span>
+                    <div className="min-w-0 leading-tight">
+                      <div className="truncate text-sm font-semibold text-foreground">{lane.name}</div>
+                      <div className="truncate text-[11px] text-muted-foreground">{lane.loadNbr}</div>
+                    </div>
+                  </div>
+                  <Badge tone={lane.planned.length ? 'primary' : 'neutral'}>{lane.planned.length}</Badge>
+                </div>
+                <div className="min-h-[72px] space-y-1.5 p-2">
+                  {lane.planned.length === 0 && (
+                    <div className="px-3 py-5 text-center text-xs text-muted-foreground">Drop an order here, or select + Plan.</div>
+                  )}
+                  {lane.planned.map((o) => (
+                    <OrderCard
+                      key={o.stopNbr}
+                      order={o}
+                      planned
+                      selected={sel.has(o.stopNbr)}
+                      onClick={() => toggle(o.stopNbr)}
+                      dragProps={dragProps(o)}
+                      unplanOne={async () => {
+                        setBusy(true)
+                        setToast(await unplan([o]))
+                        setBusy(false)
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </section>
+        </div>
+      )}
+
+      {/* MAP */}
+      {view === 'map' && (
+        <div className="mt-5 grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+          <section className="flex max-h-[calc(100dvh-260px)] flex-col rounded-xl border border-border bg-card shadow-soft">
+            <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">Orders</div>
+            <div className="flex-1 space-y-1.5 overflow-y-auto p-2">
+              {orders.map((o) => (
+                <OrderCard key={o.stopNbr} order={o} planned={!!o.plannedLoadNbr} selected={sel.has(o.stopNbr)} onClick={() => toggle(o.stopNbr)} noDrag mapped={!!coords[o.stopNbr]} />
+              ))}
+            </div>
+            <div className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+              Click markers or rows to select → pick a load above → Plan.
+            </div>
+          </section>
+          <div className="h-[calc(100dvh-260px)]">
+            <DispatchMap orders={orders} coords={coords} selected={sel} onToggle={toggle} />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function OrderCard({ order, planned, selected, onClick, dragProps, unplanOne, noDrag, mapped }) {
+  return (
+    <div
+      {...(noDrag ? {} : dragProps)}
+      className={cn(
+        'group flex items-center gap-2 rounded-lg border px-2.5 py-2 transition-colors',
+        selected ? 'border-primary/50 bg-primary/10' : 'border-transparent bg-background hover:bg-accent',
+        !noDrag && 'cursor-grab active:cursor-grabbing',
+      )}
+    >
+      {!noDrag && <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground" />}
+      <button type="button" onClick={onClick} className="focus-ring flex min-w-0 flex-1 items-center gap-2 text-left">
+        <span className={cn('grid h-4 w-4 shrink-0 place-items-center rounded border', selected ? 'border-primary bg-primary text-primary-foreground' : 'border-border-strong')}>
+          {selected && <CheckCircle2 className="h-3 w-3" />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium text-foreground">{order.name || order.stopNbr}</span>
+          <span className="block truncate text-xs text-muted-foreground">
+            {order.city ? `${order.city}${order.state ? ', ' + order.state : ''}` : order.stopNbr}
+            {order.pallets ? ` · ${order.pallets} skid${order.pallets > 1 ? 's' : ''}` : ''}
+          </span>
+        </span>
+      </button>
+      {mapped === false && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/40" title="Not yet geocoded" />}
+      {planned && unplanOne && (
+        <button
+          type="button"
+          onClick={unplanOne}
+          title="Unplan"
+          className="focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 transition hover:bg-destructive/15 hover:text-destructive group-hover:opacity-100"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      )}
     </div>
   )
 }
