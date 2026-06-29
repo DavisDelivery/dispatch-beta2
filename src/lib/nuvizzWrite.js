@@ -119,6 +119,18 @@ export const insertStops = (creds, loadId, insertStopIds) =>
   call('insertStops', creds, { loadId, insertStopIds })
 export const removeStops = (creds, loadNbr, removeStopIds) =>
   call('removeStops', creds, { loadNbr, removeStopIds })
+export const assignDriver = (creds, loadId, driverId) =>
+  call('assignDriver', creds, { loadId, driverId })
+
+// assignanddispatch returns { status: 'Success', reasons: [] } — summarize()
+// keys on 'SUCCESS', so check this shape directly.
+export function assignOk(resp) {
+  const d = resp?.data ?? resp
+  if (d == null) return { ok: false, message: 'No response' }
+  if ((d.status || '').toLowerCase() === 'success') return { ok: true, message: 'Dispatched' }
+  const msg = d?.reasons?.[0]?.description || d?.error || d?.message || JSON.stringify(d).slice(0, 200)
+  return { ok: false, message: msg }
+}
 
 // Normalize a /load/info body into { loadId, loadNbr, routeName, status, versionId, stops:[{stopId,stopNbr,...}] }
 export function normalizeLoad(resp) {

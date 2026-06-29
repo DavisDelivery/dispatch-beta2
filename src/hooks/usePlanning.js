@@ -6,7 +6,7 @@
 // number (localStorage dd_loadid_cache) so a load is read at most once, ever.
 
 import { useCallback } from 'react'
-import { getLoad, insertStops, removeStops, normalizeLoad, summarize } from '../lib/nuvizzWrite.js'
+import { getLoad, insertStops, removeStops, assignDriver, assignOk, normalizeLoad, summarize } from '../lib/nuvizzWrite.js'
 import { useCreatedOrders } from './useCreatedOrders.js'
 import { KNOWN_LOADS } from '../lib/loads.js'
 
@@ -126,5 +126,21 @@ export function usePlanning() {
     return { calls, changed, loads: loadNbrs.length }
   }, [orders, setPlanned])
 
-  return { orders, plan, unplan, reconcile }
+  // Assign + dispatch a driver to a load in NuVizz (real write). Resolves the
+  // load's loadId (cached) and calls assignanddispatch with the driver's driverId.
+  const dispatchDriver = useCallback(
+    async (loadNbr, driver) => {
+      if (!driver?.driverId) return { ok: false, message: 'That driver has no driverId.' }
+      try {
+        const loadId = await resolveLoadId(loadNbr)
+        const r = assignOk(await assignDriver({}, loadId, driver.driverId))
+        return r.ok ? { ok: true, message: `Dispatched ${driver.name} to ${loadNbr}.` } : r
+      } catch (e) {
+        return { ok: false, message: e.message }
+      }
+    },
+    [resolveLoadId],
+  )
+
+  return { orders, plan, unplan, reconcile, dispatchDriver }
 }

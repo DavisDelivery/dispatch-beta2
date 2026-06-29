@@ -31,7 +31,7 @@ function Stat({ icon: Icon, label, value, tone = 'text-foreground' }) {
 }
 
 export default function Dispatch() {
-  const { orders, plan, unplan, reconcile } = usePlanning()
+  const { orders, plan, unplan, reconcile, dispatchDriver } = usePlanning()
   const { byStop: coords } = useGeocode(orders)
   const { assignments, assign } = useAssignments()
   const [syncing, setSyncing] = useState(false)
@@ -64,6 +64,21 @@ export default function Dispatch() {
     })
   const clearSel = () => setSel(new Set())
   const selectMany = (stopNbrs) => setSel((prev) => new Set([...prev, ...stopNbrs]))
+
+  // Driver picker → record the board assignment + (for a real driver) dispatch in NuVizz.
+  const onAssignDriver = useCallback(
+    async (loadNbr, userName) => {
+      assign(loadNbr, userName) // optimistic board record (cross-device)
+      const driver = KNOWN_DRIVERS.find((d) => d.userName === userName)
+      if (!driver) return // "Unassigned" → board-only clear (NuVizz un-dispatch not wired)
+      setBusy(true)
+      setToast(null)
+      const r = await dispatchDriver(loadNbr, driver)
+      setBusy(false)
+      setToast(r)
+    },
+    [assign, dispatchDriver],
+  )
 
   // Reconcile planned/unplanned against NuVizz reality.
   const doSync = useCallback(
@@ -260,7 +275,7 @@ export default function Dispatch() {
                     </div>
                     <Badge tone={lane.planned.length ? 'primary' : 'neutral'}>{lane.planned.length}</Badge>
                   </div>
-                  <DriverSelect value={assignments[lane.loadNbr] || ''} onChange={(u) => assign(lane.loadNbr, u)} />
+                  <DriverSelect value={assignments[lane.loadNbr] || ''} onChange={(u) => onAssignDriver(lane.loadNbr, u)} />
                 </div>
                 <div className="min-h-[72px] space-y-1.5 p-2">
                   {lane.planned.length === 0 && (

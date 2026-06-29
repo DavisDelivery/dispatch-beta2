@@ -180,6 +180,18 @@ exports.handler = async (event) => {
         const r = await nuvizz('POST', `load/edit/${cc}`, auth, payload)
         return json(200, r)
       }
+      case 'assignDriver': {
+        // Assign + dispatch a driver to a load (route). routeId = the load's
+        // loadId; driverId = the driver's roster userId. Mirrors the portal's
+        // POST /load/assignanddispatch.
+        const { loadId, driverId } = req
+        if (!loadId || !driverId) return json(400, { error: 'assignDriver needs loadId and driverId' })
+        const r = await nuvizz('POST', `load/assignanddispatch/${cc}`, auth, {
+          action: 'ASSIGN_DISPATCH',
+          dispatchRoute: [{ routeId: loadId, assignDtls: { driverId: Number(driverId) } }],
+        })
+        return json(200, r)
+      }
       default:
         return json(400, { error: `Unknown op "${op}"` })
     }
