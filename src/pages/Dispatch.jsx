@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { PackagePlus, Truck, Inbox, ArrowRight, X, CheckCircle2, AlertCircle, Package, LayoutGrid, Map as MapIcon, GripVertical, User, RefreshCw } from 'lucide-react'
+import { PackagePlus, Truck, Inbox, ArrowRight, X, CheckCircle2, AlertCircle, Package, LayoutGrid, Map as MapIcon, GripVertical, User, RefreshCw, Send } from 'lucide-react'
 import { usePlanning } from '../hooks/usePlanning.js'
 import { useGeocode } from '../hooks/useGeocode.js'
 import { useBoardDrag } from '../hooks/useBoardDrag.js'
@@ -31,7 +31,7 @@ function Stat({ icon: Icon, label, value, tone = 'text-foreground' }) {
 }
 
 export default function Dispatch() {
-  const { orders, plan, unplan, reconcile, dispatchDriver } = usePlanning()
+  const { orders, plan, unplan, reconcile, dispatchDriver, dispatchLoad } = usePlanning()
   const { byStop: coords } = useGeocode(orders)
   const { assignments, assign } = useAssignments()
   const [syncing, setSyncing] = useState(false)
@@ -78,6 +78,17 @@ export default function Dispatch() {
       setToast(r)
     },
     [assign, dispatchDriver],
+  )
+
+  // Dispatch (release) a load to its assigned driver in NuVizz.
+  const onDispatch = useCallback(
+    async (loadNbr) => {
+      setBusy(true)
+      setToast(null)
+      setToast(await dispatchLoad(loadNbr))
+      setBusy(false)
+    },
+    [dispatchLoad],
   )
 
   // Reconcile planned/unplanned against NuVizz reality.
@@ -275,7 +286,20 @@ export default function Dispatch() {
                     </div>
                     <Badge tone={lane.planned.length ? 'primary' : 'neutral'}>{lane.planned.length}</Badge>
                   </div>
-                  <DriverSelect value={assignments[lane.loadNbr] || ''} onChange={(u) => onAssignDriver(lane.loadNbr, u)} />
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <DriverSelect value={assignments[lane.loadNbr] || ''} onChange={(u) => onAssignDriver(lane.loadNbr, u)} />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onDispatch(lane.loadNbr)}
+                      disabled={busy || !lane.planned.length}
+                      title={lane.planned.length ? 'Dispatch this load to its driver in NuVizz' : 'Plan stops onto this load first'}
+                      className="focus-ring inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-40"
+                    >
+                      <Send className="h-3.5 w-3.5" /> Dispatch
+                    </button>
+                  </div>
                 </div>
                 <div className="min-h-[72px] space-y-1.5 p-2">
                   {lane.planned.length === 0 && (
