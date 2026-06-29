@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { PackagePlus, Truck, Inbox, ArrowRight, X, CheckCircle2, AlertCircle, Package, LayoutGrid, Map as MapIcon, GripVertical, User, RefreshCw, Send } from 'lucide-react'
+import { PackagePlus, Truck, Inbox, ArrowRight, X, CheckCircle2, AlertCircle, Package, LayoutGrid, Map as MapIcon, GripVertical, User, RefreshCw, Send, ChevronUp, ChevronDown, ListOrdered } from 'lucide-react'
 import { usePlanning } from '../hooks/usePlanning.js'
 import { useGeocode } from '../hooks/useGeocode.js'
 import { useBoardDrag } from '../hooks/useBoardDrag.js'
@@ -31,10 +31,11 @@ function Stat({ icon: Icon, label, value, tone = 'text-foreground' }) {
 }
 
 export default function Dispatch() {
-  const { orders, plan, unplan, reconcile, dispatchDriver, dispatchLoad } = usePlanning()
+  const { orders, plan, unplan, reconcile, dispatchDriver, dispatchLoad, sequenceByLoad, sequenceLoad } = usePlanning()
   const { byStop: coords } = useGeocode(orders)
   const { assignments, assign } = useAssignments()
   const [syncing, setSyncing] = useState(false)
+  const [drafts, setDrafts] = useState({}) // loadNbr -> [stopNbr] pending manual order
   const [sel, setSel] = useState(() => new Set())
   const [target, setTarget] = useState('')
   const [busy, setBusy] = useState(false)
@@ -90,6 +91,45 @@ export default function Dispatch() {
     },
     [dispatchLoad],
   )
+
+  // ---- Manual sequencing (one-at-a-time insert preserves order) ----
+  // Effective order for a lane: a pending draft, else NuVizz's real order, else
+  // registry order. Returns the planned orders in that order.
+  const laneOrder = (lane) => {
+    const base = drafts[lane.loadNbr] || sequenceByLoad[lane.loadNbr] || []
+    const byNbr = new Map(lane.planned.map((o) => [o.stopNbr, o]))
+    const ordered = base.map((sn) => byNbr.get(sn)).filter(Boolean)
+    for (const o of lane.planned) if (!base.includes(o.stopNbr)) ordered.push(o)
+    return ordered
+  }
+  const moveStop = (loadNbr, ordered, idx, dir) => {
+    const j = idx + dir
+    if (j < 0 || j >= ordered.length) return
+    const nums = ordered.map((o) => o.stopNbr)
+    ;[nums[idx], nums[j]] = [nums[j], nums[idx]]
+    setDrafts((d) => ({ ...d, [loadNbr]: nums }))
+  }
+  const draftDiffers = (lane) => {
+    const draft = drafts[lane.loadNbr]
+    if (!draft) return false
+    const committed = sequenceByLoad[lane.loadNbr] || lane.planned.map((o) => o.stopNbr)
+    return draft.join(',') !== committed.join(',')
+  }
+  const clearDraft = (loadNbr) =>
+    setDrafts((d) => {
+      const n = { ...d }
+      delete n[loadNbr]
+      return n
+    })
+  const applySequence = async (loadNbr) => {
+    if (!drafts[loadNbr]) return
+    setBusy(true)
+    setToast(null)
+    const r = await sequenceLoad(loadNbr, drafts[loadNbr])
+    setToast(r)
+    if (r.ok) clearDraft(loadNbr)
+    setBusy(false)
+  }
 
   // Reconcile planned/unplanned against NuVizz reality.
   const doSync = useCallback(
@@ -305,11 +345,14 @@ export default function Dispatch() {
                   {lane.planned.length === 0 && (
                     <div className="px-3 py-5 text-center text-xs text-muted-foreground">Drop an order here, or select + Plan.</div>
                   )}
-                  {lane.planned.map((o) => (
+                  {laneOrder(lane).map((o, i, arr) => (
                     <OrderCard
                       key={o.stopNbr}
                       order={o}
                       planned
+                      seqNo={i + 1}
+                      onUp={i > 0 ? () => moveStop(lane.loadNbr, arr, i, -1) : null}
+                      onDown={i < arr.length - 1 ? () => moveStop(lane.loadNbr, arr, i, 1) : null}
                       selected={sel.has(o.stopNbr)}
                       onClick={() => toggle(o.stopNbr)}
                       onHandleDown={start(o)}
@@ -322,6 +365,18 @@ export default function Dispatch() {
                     />
                   ))}
                 </div>
+                {draftDiffers(lane) && (
+                  <div className="flex items-center gap-2 border-t border-border bg-primary/5 px-3 py-2">
+                    <ListOrdered className="h-3.5 w-3.5 text-primary" />
+                    <span className="text-[11px] font-medium text-muted-foreground">Order changed</span>
+                    <button type="button" onClick={() => clearDraft(lane.loadNbr)} disabled={busy} className="focus-ring ml-auto rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40">
+                      Reset
+                    </button>
+                    <button type="button" onClick={() => applySequence(lane.loadNbr)} disabled={busy} className="focus-ring inline-flex h-7 items-center gap-1 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40">
+                      Apply order
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </section>
@@ -387,7 +442,7 @@ function DriverSelect({ value, onChange }) {
   )
 }
 
-function OrderCard({ order, planned, selected, onClick, onHandleDown, dragging, unplanOne, noDrag, mapped }) {
+function OrderCard({ order, planned, selected, onClick, onHandleDown, dragging, unplanOne, noDrag, mapped, seqNo, onUp, onDown }) {
   return (
     <div
       className={cn(
@@ -405,6 +460,11 @@ function OrderCard({ order, planned, selected, onClick, onHandleDown, dragging, 
           <GripVertical className="h-4 w-4" />
         </span>
       )}
+      {seqNo != null && (
+        <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary/15 text-[11px] font-semibold tabular-nums text-primary" title={`Stop ${seqNo}`}>
+          {seqNo}
+        </span>
+      )}
       <button type="button" onClick={onClick} className="focus-ring flex min-w-0 flex-1 items-center gap-2 text-left">
         <span className={cn('grid h-4 w-4 shrink-0 place-items-center rounded border', selected ? 'border-primary bg-primary text-primary-foreground' : 'border-border-strong')}>
           {selected && <CheckCircle2 className="h-3 w-3" />}
@@ -418,6 +478,16 @@ function OrderCard({ order, planned, selected, onClick, onHandleDown, dragging, 
         </span>
       </button>
       {mapped === false && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/40" title="Not yet geocoded" />}
+      {(onUp || onDown) && (
+        <span className="flex shrink-0 flex-col opacity-0 transition group-hover:opacity-100">
+          <button type="button" onClick={onUp} disabled={!onUp} title="Move earlier" className="focus-ring grid h-3.5 w-5 place-items-center rounded text-muted-foreground hover:text-foreground disabled:opacity-20">
+            <ChevronUp className="h-3.5 w-3.5" />
+          </button>
+          <button type="button" onClick={onDown} disabled={!onDown} title="Move later" className="focus-ring grid h-3.5 w-5 place-items-center rounded text-muted-foreground hover:text-foreground disabled:opacity-20">
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        </span>
+      )}
       {planned && unplanOne && (
         <button
           type="button"

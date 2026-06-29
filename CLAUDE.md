@@ -114,6 +114,14 @@ the incremental reskin), a token theme (`src/styles/theme.css`, HSL vars, dark-f
   yet captured). Each lane also has a **Dispatch** button → `usePlanning().dispatchLoad` → write fn
   `dispatchLoad` op → same endpoint with `{action:'DISPATCH',dispatchRoute:[{routeId:loadId}]}` (releases
   the load to its assigned driver).
+- **Manual sequencing (v0.30.0)**: NuVizz auto-optimizes a BULK `insertStops` but APPENDS a
+  single insert — so stop order is controllable by inserting one-at-a-time. Each load lane
+  shows stops in NuVizz's real `to.seq` order (captured by `reconcile`, surfaced via
+  `normalizeLoad`'s `seq` = `stop.to.seq`) with number badges + ▲▼ reorder. Reordering builds a
+  local draft; **Apply order** commits via `usePlanning().sequenceLoad` → keep the first stop as
+  an anchor (removing ALL stops cancels the route), `removeStops` the rest, then re-insert them
+  one-at-a-time in order. Cost ≈ 2 + (N−1) calls. The order is REAL (reaches the driver). NOT in
+  `docs/NUVIZZ_API.md` yet — pending the user's "other path" HAR for a cheaper re-sequence.
 - **Sync (reconcile)**: the registry's `plannedLoadNbr` is local and can drift from NuVizz reality
   (e.g. planned-shows-unplanned). `usePlanning().reconcile()` reads each relevant load (`KNOWN_LOADS`
   + any load an order claims) ONCE via `getLoad` — a scoped, cheap "scan" (NOT the davis-nuvizz
