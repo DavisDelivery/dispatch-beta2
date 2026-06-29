@@ -108,6 +108,11 @@ the incremental reskin), a token theme (`src/styles/theme.css`, HSL vars, dark-f
   clean enough to drop office roles → 60 road drivers). Assignments are server-backed + cross-device via
   `netlify/functions/assignments.cjs` + `src/hooks/useAssignments.js` (load→driver map in Blobs). This
   is a board-level association only — NOT yet pushed to NuVizz as a dispatch/tender.
+- **Sync (reconcile)**: the registry's `plannedLoadNbr` is local and can drift from NuVizz reality
+  (e.g. planned-shows-unplanned). `usePlanning().reconcile()` reads each relevant load (`KNOWN_LOADS`
+  + any load an order claims) ONCE via `getLoad` — a scoped, cheap "scan" (NOT the davis-nuvizz
+  ~3000-call number-probe) — builds the true stopNbr→loadNbr membership and corrects each order's
+  planned flag. Runs on a **Sync** button + auto-once per page load (`autoSyncDone` module flag).
 - Reskin is incremental: new screens use the design system; legacy pages get migrated
   page-by-page, then `index.css` retires.
 

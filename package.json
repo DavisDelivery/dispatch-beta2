@@ -1,7 +1,7 @@
 {
   "name": "dispatch-beta2",
   "private": true,
-  "version": "0.25.0",
+  "version": "0.26.0",
   "type": "module",
   "description": "Davis Delivery Beta 2 — mobile-first dispatch cockpit (NuVizz read-only).",
   "scripts": {
