@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { PackagePlus, Truck, Inbox, ArrowRight, X, CheckCircle2, AlertCircle, Package, LayoutGrid, Map as MapIcon, GripVertical, User } from 'lucide-react'
+import { PackagePlus, Truck, Inbox, ArrowRight, X, CheckCircle2, AlertCircle, Package, LayoutGrid, Map as MapIcon, GripVertical, User, RefreshCw } from 'lucide-react'
 import { usePlanning } from '../hooks/usePlanning.js'
 import { useGeocode } from '../hooks/useGeocode.js'
 import { useBoardDrag } from '../hooks/useBoardDrag.js'
@@ -11,6 +11,10 @@ import DispatchMap from '../components/dispatch/DispatchMap.jsx'
 import Button from '../ui/Button.jsx'
 import Badge from '../ui/Badge.jsx'
 import { cn } from '../lib/cn.js'
+
+// Auto-reconcile with NuVizz once per page load (a fresh module instance per
+// full reload), so the board reflects reality when you open it.
+let autoSyncDone = false
 
 function Stat({ icon: Icon, label, value, tone = 'text-foreground' }) {
   return (
@@ -27,9 +31,10 @@ function Stat({ icon: Icon, label, value, tone = 'text-foreground' }) {
 }
 
 export default function Dispatch() {
-  const { orders, plan, unplan } = usePlanning()
+  const { orders, plan, unplan, reconcile } = usePlanning()
   const { byStop: coords } = useGeocode(orders)
   const { assignments, assign } = useAssignments()
+  const [syncing, setSyncing] = useState(false)
   const [sel, setSel] = useState(() => new Set())
   const [target, setTarget] = useState('')
   const [busy, setBusy] = useState(false)
@@ -59,6 +64,32 @@ export default function Dispatch() {
     })
   const clearSel = () => setSel(new Set())
   const selectMany = (stopNbrs) => setSel((prev) => new Set([...prev, ...stopNbrs]))
+
+  // Reconcile planned/unplanned against NuVizz reality.
+  const doSync = useCallback(
+    async (auto) => {
+      setSyncing(true)
+      const r = await reconcile()
+      setSyncing(false)
+      if (!auto || r.changed) {
+        setToast({
+          ok: true,
+          message: r.changed
+            ? `Synced with NuVizz — ${r.changed} order(s) corrected (${r.calls} load read${r.calls === 1 ? '' : 's'}).`
+            : `Already in sync with NuVizz (${r.calls} load read${r.calls === 1 ? '' : 's'}).`,
+        })
+      }
+    },
+    [reconcile],
+  )
+
+  // Auto-sync once per page load, after the registry has loaded.
+  useEffect(() => {
+    if (orders.length && !autoSyncDone) {
+      autoSyncDone = true
+      doSync(true)
+    }
+  }, [orders.length, doSync])
 
   // Plan the selected orders onto `target` (moving any already planned elsewhere).
   const doPlan = async () => {
@@ -131,6 +162,11 @@ export default function Dispatch() {
             </button>
           ))}
         </div>
+
+        <Button variant="ghost" size="sm" onClick={() => doSync(false)} disabled={syncing} title="Re-read NuVizz and fix any planned/unplanned drift">
+          <RefreshCw className={cn('h-4 w-4', syncing && 'animate-spin')} />
+          {syncing ? 'Syncing…' : 'Sync'}
+        </Button>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {sel.size > 0 && <Badge tone="primary">{sel.size} selected</Badge>}

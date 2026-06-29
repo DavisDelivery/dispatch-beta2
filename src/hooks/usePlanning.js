@@ -90,5 +90,41 @@ export function usePlanning() {
     [setPlanned],
   )
 
-  return { orders, plan, unplan }
+  // Reconcile the registry's planned state against NuVizz reality. Reads each
+  // relevant load (KNOWN_LOADS + any load an order claims) ONCE — a scoped, cheap
+  // "scan" (no number-probing) — builds the true stopNbr -> loadNbr membership,
+  // and fixes any order whose planned flag drifted (planned-shows-unplanned, or
+  // vice-versa). Cost = number of loads read, independent of order count.
+  const reconcile = useCallback(async () => {
+    const loadNbrs = [...new Set([...KNOWN_LOADS.map((l) => l.loadNbr), ...orders.map((o) => o.plannedLoadNbr).filter(Boolean)])]
+    const stopToLoad = {}
+    let calls = 0
+    for (const nbr of loadNbrs) {
+      try {
+        const L = normalizeLoad(await getLoad({}, nbr))
+        calls++
+        for (const s of L.stops || []) if (s.stopNbr) stopToLoad[s.stopNbr] = L.loadNbr || nbr
+      } catch {
+        /* a missing/cancelled load just isn't a source of truth */
+      }
+    }
+    // Group the orders whose planned state changed, by their true load.
+    const groups = new Map()
+    for (const o of orders) {
+      const truth = stopToLoad[o.stopNbr] || null
+      if ((o.plannedLoadNbr || null) !== truth) {
+        const key = truth || ''
+        if (!groups.has(key)) groups.set(key, [])
+        groups.get(key).push(o.stopNbr)
+      }
+    }
+    let changed = 0
+    for (const [loadNbr, stopNbrs] of groups) {
+      setPlanned(stopNbrs, loadNbr || null)
+      changed += stopNbrs.length
+    }
+    return { calls, changed, loads: loadNbrs.length }
+  }, [orders, setPlanned])
+
+  return { orders, plan, unplan, reconcile }
 }
