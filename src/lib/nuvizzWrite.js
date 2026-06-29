@@ -121,6 +121,7 @@ export const removeStops = (creds, loadNbr, removeStopIds) =>
   call('removeStops', creds, { loadNbr, removeStopIds })
 export const assignDriver = (creds, loadId, driverId) =>
   call('assignDriver', creds, { loadId, driverId })
+export const dispatchLoad = (creds, loadId) => call('dispatchLoad', creds, { loadId })
 
 // assignanddispatch returns { status: 'Success', reasons: [] } — summarize()
 // keys on 'SUCCESS', so check this shape directly.

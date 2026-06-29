@@ -192,6 +192,16 @@ exports.handler = async (event) => {
         })
         return json(200, r)
       }
+      case 'dispatchLoad': {
+        // Dispatch (release) a load to its assigned driver. routeId = loadId.
+        const { loadId } = req
+        if (!loadId) return json(400, { error: 'dispatchLoad needs loadId' })
+        const r = await nuvizz('POST', `load/assignanddispatch/${cc}`, auth, {
+          action: 'DISPATCH',
+          dispatchRoute: [{ routeId: loadId }],
+        })
+        return json(200, r)
+      }
       default:
         return json(400, { error: `Unknown op "${op}"` })
     }

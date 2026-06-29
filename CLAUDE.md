@@ -111,7 +111,9 @@ the incremental reskin), a token theme (`src/styles/theme.css`, HSL vars, dark-f
   and calls the write fn's `assignDriver` op → `POST load/assignanddispatch/{cc}`
   `{action:'ASSIGN_DISPATCH',dispatchRoute:[{routeId:loadId,assignDtls:{driverId}}]}` (driverId = the
   roster userId in `KNOWN_DRIVERS`). "Unassigned" clears the board record only (NuVizz un-dispatch not
-  yet captured).
+  yet captured). Each lane also has a **Dispatch** button → `usePlanning().dispatchLoad` → write fn
+  `dispatchLoad` op → same endpoint with `{action:'DISPATCH',dispatchRoute:[{routeId:loadId}]}` (releases
+  the load to its assigned driver).
 - **Sync (reconcile)**: the registry's `plannedLoadNbr` is local and can drift from NuVizz reality
   (e.g. planned-shows-unplanned). `usePlanning().reconcile()` reads each relevant load (`KNOWN_LOADS`
   + any load an order claims) ONCE via `getLoad` — a scoped, cheap "scan" (NOT the davis-nuvizz
