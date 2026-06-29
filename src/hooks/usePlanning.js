@@ -5,7 +5,7 @@
 // loadId resolution: from KNOWN_LOADS, else a cached one-time getLoad per load
 // number (localStorage dd_loadid_cache) so a load is read at most once, ever.
 
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { getLoad, insertStops, removeStops, assignDriver, dispatchLoad as apiDispatchLoad, assignOk, normalizeLoad, summarize } from '../lib/nuvizzWrite.js'
 import { useCreatedOrders } from './useCreatedOrders.js'
 import { KNOWN_LOADS } from '../lib/loads.js'
@@ -32,6 +32,8 @@ const cache = {
 
 export function usePlanning() {
   const { orders, setPlanned } = useCreatedOrders()
+  // loadNbr -> [stopNbr] in NuVizz's real visit order (to.seq), captured on reconcile.
+  const [sequenceByLoad, setSequenceByLoad] = useState({})
 
   const resolveLoadId = useCallback(async (loadNbr) => {
     const known = KNOWN_LOADS.find((l) => l.loadNbr === loadNbr)
@@ -98,16 +100,24 @@ export function usePlanning() {
   const reconcile = useCallback(async () => {
     const loadNbrs = [...new Set([...KNOWN_LOADS.map((l) => l.loadNbr), ...orders.map((o) => o.plannedLoadNbr).filter(Boolean)])]
     const stopToLoad = {}
+    const orderMap = {}
     let calls = 0
     for (const nbr of loadNbrs) {
       try {
         const L = normalizeLoad(await getLoad({}, nbr))
         calls++
-        for (const s of L.stops || []) if (s.stopNbr) stopToLoad[s.stopNbr] = L.loadNbr || nbr
+        const key = L.loadNbr || nbr
+        for (const s of L.stops || []) if (s.stopNbr) stopToLoad[s.stopNbr] = key
+        // capture the real visit order (by to.seq)
+        orderMap[key] = (L.stops || [])
+          .filter((s) => s.stopNbr)
+          .sort((a, b) => (a.seq ?? 1e9) - (b.seq ?? 1e9))
+          .map((s) => s.stopNbr)
       } catch {
         /* a missing/cancelled load just isn't a source of truth */
       }
     }
+    setSequenceByLoad(orderMap)
     // Group the orders whose planned state changed, by their true load.
     const groups = new Map()
     for (const o of orders) {
@@ -153,5 +163,39 @@ export function usePlanning() {
     }
   }, [resolveLoadId])
 
-  return { orders, plan, unplan, reconcile, dispatchDriver, dispatchLoad }
+  // Set a load's stop order in NuVizz to exactly `orderedStopNbrs`. NuVizz auto-
+  // optimizes a bulk insert but APPENDS a single insert, so we remove the stops
+  // and re-insert them ONE AT A TIME in order — the sequence then sticks. Cost =
+  // ~2 (remove) + N (one insert per stop) NuVizz calls.
+  const sequenceLoad = useCallback(
+    async (loadNbr, orderedStopNbrs) => {
+      const byNbr = new Map(orders.map((o) => [o.stopNbr, o]))
+      const items = orderedStopNbrs.map((sn) => byNbr.get(sn)).filter((o) => o && o.stopId)
+      if (items.length < 2) return { ok: false, message: 'Need 2+ stops to sequence.' }
+      try {
+        const loadId = await resolveLoadId(loadNbr)
+        // Keep the first desired stop as an anchor (removing ALL stops cancels the
+        // route), remove the rest, then re-insert them one-at-a-time in order — a
+        // single insert appends, so the final order is exactly [first, …rest].
+        const [first, ...rest] = items
+        const rem = summarize(await removeStops({}, loadNbr, rest.map((o) => o.stopId)))
+        if (!rem.ok) return { ok: false, message: `Couldn’t reorder: ${rem.message}` }
+        let n = 1
+        for (const o of rest) {
+          const r = summarize(await insertStops({}, loadId, [o.stopId]))
+          if (!r.ok) return { ok: false, message: `Re-inserting ${o.stopNbr} failed: ${r.message}` }
+          n++
+        }
+        void first
+        // optimistic local order so the board reflects it before the next reconcile
+        setSequenceByLoad((m) => ({ ...m, [loadNbr]: items.map((o) => o.stopNbr) }))
+        return { ok: true, message: `Sequenced ${n} stop(s) on ${loadNbr}.`, calls: 2 + n }
+      } catch (e) {
+        return { ok: false, message: e.message }
+      }
+    },
+    [orders, resolveLoadId],
+  )
+
+  return { orders, plan, unplan, reconcile, dispatchDriver, dispatchLoad, sequenceByLoad, sequenceLoad }
 }

@@ -142,7 +142,8 @@ export function normalizeLoad(resp) {
   const h = L.loadHeader || {}
   const stops = (L.stops || []).map((s) => {
     const st = s.stop || s
-    return { stopId: st.stopId, stopNbr: st.stopNbr, stopSeq: st.stopSeq, stopType: st.stopType }
+    // seq = the authoritative route stop sequence (stop.to.seq); array order is unreliable.
+    return { stopId: st.stopId, stopNbr: st.stopNbr, stopSeq: st.stopSeq, seq: st.to?.seq ?? null, stopType: st.stopType }
   })
   return {
     loadId: h.loadId,
