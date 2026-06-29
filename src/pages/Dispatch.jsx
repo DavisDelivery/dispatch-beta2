@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { PackagePlus, Truck, Inbox, ArrowRight, X, CheckCircle2, AlertCircle, Package, LayoutGrid, Map as MapIcon, GripVertical } from 'lucide-react'
+import { PackagePlus, Truck, Inbox, ArrowRight, X, CheckCircle2, AlertCircle, Package, LayoutGrid, Map as MapIcon, GripVertical, User } from 'lucide-react'
 import { usePlanning } from '../hooks/usePlanning.js'
 import { useGeocode } from '../hooks/useGeocode.js'
 import { useBoardDrag } from '../hooks/useBoardDrag.js'
+import { useAssignments } from '../hooks/useAssignments.js'
 import { KNOWN_LOADS } from '../lib/loads.js'
+import { KNOWN_DRIVERS } from '../lib/drivers.js'
 import DispatchMap from '../components/dispatch/DispatchMap.jsx'
 import Button from '../ui/Button.jsx'
 import Badge from '../ui/Badge.jsx'
@@ -27,6 +29,7 @@ function Stat({ icon: Icon, label, value, tone = 'text-foreground' }) {
 export default function Dispatch() {
   const { orders, plan, unplan } = usePlanning()
   const { byStop: coords } = useGeocode(orders)
+  const { assignments, assign } = useAssignments()
   const [sel, setSel] = useState(() => new Set())
   const [target, setTarget] = useState('')
   const [busy, setBusy] = useState(false)
@@ -210,15 +213,18 @@ export default function Dispatch() {
                   zone === lane.loadNbr ? 'border-primary/60 ring-2 ring-primary/30' : 'border-border',
                 )}
               >
-                <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground"><Truck className="h-4 w-4" strokeWidth={1.9} /></span>
-                    <div className="min-w-0 leading-tight">
-                      <div className="truncate text-sm font-semibold text-foreground">{lane.name}</div>
-                      <div className="truncate text-[11px] text-muted-foreground">{lane.loadNbr}</div>
+                <div className="space-y-2 border-b border-border px-4 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground"><Truck className="h-4 w-4" strokeWidth={1.9} /></span>
+                      <div className="min-w-0 leading-tight">
+                        <div className="truncate text-sm font-semibold text-foreground">{lane.name}</div>
+                        <div className="truncate text-[11px] text-muted-foreground">{lane.loadNbr}</div>
+                      </div>
                     </div>
+                    <Badge tone={lane.planned.length ? 'primary' : 'neutral'}>{lane.planned.length}</Badge>
                   </div>
-                  <Badge tone={lane.planned.length ? 'primary' : 'neutral'}>{lane.planned.length}</Badge>
+                  <DriverSelect value={assignments[lane.loadNbr] || ''} onChange={(u) => assign(lane.loadNbr, u)} />
                 </div>
                 <div className="min-h-[72px] space-y-1.5 p-2">
                   {lane.planned.length === 0 && (
@@ -276,6 +282,32 @@ export default function Dispatch() {
           {drag.order.name || drag.order.stopNbr}
         </div>
       )}
+    </div>
+  )
+}
+
+function DriverSelect({ value, onChange }) {
+  return (
+    <div
+      className={cn(
+        'flex items-center gap-1.5 rounded-lg border px-2 py-1 transition-colors',
+        value ? 'border-primary/40 bg-primary/5' : 'border-border bg-background',
+      )}
+    >
+      <User className={cn('h-3.5 w-3.5 shrink-0', value ? 'text-primary' : 'text-muted-foreground')} />
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        title="Assign a driver to this load"
+        className="focus-ring w-full cursor-pointer truncate bg-transparent text-xs font-medium text-foreground outline-none"
+      >
+        <option value="">Unassigned</option>
+        {KNOWN_DRIVERS.map((d) => (
+          <option key={d.userName} value={d.userName}>
+            {d.name}
+          </option>
+        ))}
+      </select>
     </div>
   )
 }
