@@ -56,22 +56,31 @@ const blankOrder = () => ({
 
 // Compact TSV/CSV parser for bulk paste (header optional; falls back to column order).
 const COLS = ['name', 'addr1', 'addr2', 'city', 'state', 'zip', 'pro', 'pallets', 'cartons', 'weight', 'stopNbr']
-const ALIAS = {
-  name: ['name', 'consignee', 'customer'],
-  addr1: ['addr1', 'address', 'address1', 'street'],
-  addr2: ['addr2', 'ste', 'suite', 'unit'],
-  city: ['city'],
-  state: ['state', 'st'],
-  zip: ['zip', 'postal'],
-  pro: ['pro', 'pro#', 'tracking'],
-  pallets: ['pallets', 'plt', 'skids'],
-  cartons: ['cartons', 'ctn', 'cases'],
-  weight: ['weight', 'wt', 'lbs'],
-  stopNbr: ['stopnbr', 'stop#', 'stop'],
-}
+// Ordered header rules (first match wins) — robust to the Davis export layout
+// ("Ship To Name", "Ship To - Address Line 1", "Stop Number", "Shipment Number",
+// "Skids", "Loose", "Stop Weight", "Zip Code") AND simple hand-typed headers.
+// Consignee ("Ship To") address only — "Ship From" (origin) columns are ignored.
+const HEADER_RULES = [
+  ['stopNbr', /^stop\s*(number|nbr|no|#)|^stop$|stop\s*#/],
+  ['pro', /shipment\s*(number|nbr|#)|^pro\b|^pro#|tracking/],
+  ['name', /ship\s*to\s*name|consignee|^name$|customer\s*name/],
+  ['addr2', /ship\s*to.*(address.*(line\s*)?2|addr.*2)|^addr2$|^address\s*2|suite|^ste$|^unit$/],
+  ['addr1', /ship\s*to.*(address.*(line\s*)?1?|addr)|^addr1$|^address\s*1?$|^street$/],
+  ['city', /ship\s*to.*city|^city$/],
+  ['state', /ship\s*to.*state|^state$|^st$/],
+  ['zip', /zip|postal/],
+  ['pallets', /skid|pallet|^plt$/],
+  ['cartons', /loose|carton|^ctn$|cases/],
+  ['weight', /weight|^wt$|lbs/],
+]
 const headerToKey = (h) => {
   const n = h.trim().toLowerCase()
-  return Object.keys(ALIAS).find((k) => ALIAS[k].includes(n)) || null
+  if (!n || /ship\s*from/.test(n) || /uom|sequence|signature|stop\s*type|volume|product|price|email|customer\s*number|confirmation|dttm|^comments?$/.test(n)) {
+    // explicitly-ignored columns (incl. Ship From origin + non-order metadata)
+    if (!/ship\s*to/.test(n)) return null
+  }
+  const hit = HEADER_RULES.find(([, re]) => re.test(n))
+  return hit ? hit[0] : null
 }
 function parseDelimited(text) {
   const lines = text.replace(/\r/g, '').split('\n').filter((l) => l.trim() !== '')

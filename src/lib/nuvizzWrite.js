@@ -33,6 +33,8 @@ async function call(op, creds, args = {}) {
 }
 
 const clean = (v) => (v == null ? undefined : String(v).trim() || undefined)
+// NuVizz caps the consignee name at 50 chars; trim so a long name doesn't 400.
+const clip = (v, n) => (v == null ? v : String(v).slice(0, n))
 const num = (v) => {
   if (v == null || v === '') return undefined
   const n = parseFloat(String(v).replace(/[^0-9.\-]/g, ''))
@@ -79,7 +81,7 @@ export function buildStopPayload(row, s) {
     to: {
       address: {
         addressType: 'COM',
-        name: clean(row.name),
+        name: clip(clean(row.name), 50),
         addr1: clean(row.addr1),
         addr2: clean(row.addr2),
         city: clean(row.city),
