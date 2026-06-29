@@ -102,8 +102,10 @@ the incremental reskin), a token theme (`src/styles/theme.css`, HSL vars, dark-f
   `routingSelect` + an OverlayView projection). Coords come from `useGeocode`
   (`src/hooks/useGeocode.js` — client-side Google Geocoder, cached in `dd_geocode_cache`; NOT a NuVizz
   call). Plan/unplan via `usePlanning` (`src/hooks/usePlanning.js`); API touched only on plan/unplan.
-  Each load lane has a **driver picker** (`KNOWN_DRIVERS` in `src/lib/drivers.js` — 60 drivers parsed
-  from the NuVizz DAVIS roster HAR). Assignments are server-backed + cross-device via
+  Each load lane has a **driver picker** (`KNOWN_DRIVERS` in `src/lib/drivers.js` — the enabled
+  `DI_Driver` accounts of the tenant we WRITE to; currently UAT `DAVISV5` = 53. The file header
+  documents the `user/list` pull so it's repeatable for the DAVIS prod switch — there the roster is
+  clean enough to drop office roles → 60 road drivers). Assignments are server-backed + cross-device via
   `netlify/functions/assignments.cjs` + `src/hooks/useAssignments.js` (load→driver map in Blobs). This
   is a board-level association only — NOT yet pushed to NuVizz as a dispatch/tender.
 - Reskin is incremental: new screens use the design system; legacy pages get migrated
