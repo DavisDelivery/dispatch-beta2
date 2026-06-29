@@ -1,0 +1,256 @@
+# NuVizz API — integration handoff (Davis Dispatch)
+
+Everything another app/agent needs to drive NuVizz the way Davis Dispatch does:
+every call we make, its exact request/response, what to extract, and the
+**production switch** checklist. Source of truth for the live code:
+`netlify/functions/nuvizz-write.cjs` + `src/lib/nuvizzWrite.js`.
+
+> **Mental model.** The NuVizz portal is itself just a client of the NuVizz API.
+> Every write you do here (create / plan / unplan / assign / dispatch) is the
+> *same* API call the portal makes — **1:1, often fewer**, because we skip the
+> portal's validation/refresh chatter. Writes are cheap and unavoidable. The only
+> place call volume grows is **reads** (populating boards/maps); we keep those
+> near zero by holding state locally (see §7) and never scanning.
+
+---
+
+## 1. Connection & auth
+
+| | UAT (current) | Production (DAVIS) |
+|---|---|---|
+| API base (v7) | `https://uat.nuvizz.com/deliverit/openapi/v7` | `https://portal.nuvizz.com/deliverit/openapi/v7` |
+| Entity base (grids) | `https://uat.nuvizz.com/deliverit/openapi` | `https://portal.nuvizz.com/deliverit/openapi` |
+| Company code (`{cc}` in paths) | `DAVISV5` | `DAVIS` |
+| Auth | HTTP Basic | HTTP Basic |
+
+- **Auth header:** `Authorization: Basic base64(username:password)`. Same NuVizz
+  user/pass for every call. We store them server-side as env vars
+  `NUVIZZ_DAVIS_USER` / `NUVIZZ_DAVIS_PASS` / `NUVIZZ_DAVIS_COMPANY_CODE`.
+- **Content type:** `application/json` on every POST. Send `Accept: application/json`.
+- The company code is both the **path segment** `{cc}` and (for `createStop`) a
+  body field `companyCode`.
+
+---
+
+## 2. How our app routes the calls
+
+```
+Browser UI ──POST {op,…}──► Netlify fn  nuvizz-write.cjs ──Basic auth──► NuVizz v7
+                                  │
+                                  └─ counts every upstream call (callCounter.cjs)
+```
+
+The browser never holds NuVizz creds; it POSTs an **op** to our function, which
+adds Basic auth from env and forwards to NuVizz. You don't have to keep this
+proxy — another backend can call NuVizz directly with the same
+endpoints/payloads below. The proxy exists for (a) keeping creds server-side and
+(b) the call counter chokepoint.
+
+**Op envelope** (POST to the write fn): `{ "op": "<name>", …args }`. Creds fall
+back to env; a request may override `companyCode`/`username`/`password`.
+
+---
+
+## 3. The calls
+
+For each: what it does · method + path · request · response · what to extract.
+`{cc}` = URL-encoded company code. All paths are under the **v7 base** unless noted.
+
+### 3.1 createStop — create an order (delivery stop)
+- **POST** `stop/sync/update/{cc}`
+- **Body:** `{ "companyCode": "<cc>", "stop": <STOP_PAYLOAD> }` (see §4 for the stop shape)
+- **Response (success):**
+  ```json
+  { "apiResult": { "created": 1 },
+    "entityInfoList": [ { "entityId": "6a3f…523d", "entityNbr": "007139395" } ] }
+  ```
+- **Extract:** `entityInfoList[0].entityId` = the **stopId** (needed to plan), `entityNbr` = the stop number. Keep both.
+- Upstream calls: **1**.
+
+### 3.2 getStop — read a stop (and its current load)
+- **GET** `stop/info/{stopNbr}/{cc}`
+- **Response:** `{ "Stop": { "stop": {…}, "stopExecutionInfo": {…}, "load": { "loadNbr", "routeName" } } }`
+- **Extract:** `Stop.stop.stopId`, `Stop.stopExecutionInfo.stopStatus`, **`Stop.load.loadNbr`** (which load it's on now — null/absent ⇒ unplanned), `Stop.stop.to.address.{name,city,state,latitude,longitude}`.
+- Upstream calls: **1**.
+
+### 3.3 getLoad — read a load + its stops
+- **GET** `load/info/{loadNbr}/{cc}`
+- **Response:** `{ "Load": { "loadHeader": { "loadId", "loadNbr", "routeName", … }, "loadExecutionInfo": { "loadStatus" }, "versionId", "stops": [ { "stop": { "stopId", "stopNbr", "stopSeq", "stopType" } } ], "loadAssignment": {} } }`
+- **Extract:** `loadHeader.loadId` (the internal id used as **routeId** for assign/dispatch, and as **loadId** for insertStops), `loadExecutionInfo.loadStatus`, `versionId` (needed for `load/edit`), and `stops[].stop.stopNbr` (membership → which orders are on this load).
+- Upstream calls: **1**.
+
+### 3.4 insertStops — plan stops onto a load
+- **POST** `load/insertstops/{cc}`
+- **Body:** `{ "insertStopIds": ["<stopId>", …], "loadId": "<loadId>" }`
+  (stopIds from createStop/getStop; loadId from getLoad.)
+- **Response:** success body (no special parse needed; treat HTTP 200 + no `reasons`/`error` as ok).
+- Upstream calls: **1** (accepts MANY stopIds in one call — batch them).
+
+### 3.5 removeStops — unplan stops from a load
+- **POST** `load/edit/{cc}` — but `load/edit` is a **FULL header replace**, so you must first GET the load and echo its whole header back, or fields blank out.
+- **Step 1:** GET `load/info/{loadNbr}/{cc}` → `loadHeader` + `versionId`.
+- **Step 2:** POST `load/edit/{cc}` with:
+  ```json
+  { "loadHeader": <ECHOED_EDIT_HEADER>, "removeStopIds": ["<stopId>", …],
+    "routeSeq": [], "versionId": "<versionId>" }
+  ```
+  The echoed header maps load/info → edit fields (see §5 `toEditHeader`).
+- Upstream calls: **2** (load/info + load/edit).
+
+### 3.6 assignDriver — assign a driver to a load
+- **POST** `load/assignanddispatch/{cc}`
+- **Body:**
+  ```json
+  { "action": "ASSIGN_DISPATCH",
+    "dispatchRoute": [ { "routeId": "<loadId>", "assignDtls": { "driverId": <driverId> } } ] }
+  ```
+  - `routeId` = the load's **loadId** (from getLoad).
+  - `driverId` = the driver's **roster userId** (a number — see §6). NOT the userName.
+- **Response:** `{ "status": "Success", "successMsgs": [], "reasons": [] }`
+- **Success check:** `status === "Success"` (note: capital-S "Success", not "SUCCESS"). On failure `reasons[0].description` has the reason.
+- Upstream calls: **1**. (The portal also fires assignValidation + several refresh GETs; you don't need them.)
+
+### 3.7 dispatchLoad — release a load to its assigned driver
+- **POST** `load/assignanddispatch/{cc}`
+- **Body:** `{ "action": "DISPATCH", "dispatchRoute": [ { "routeId": "<loadId>" } ] }`
+- **Response / success check:** same as §3.6 (`status: "Success"`).
+- Upstream calls: **1**. Typical flow: plan stops → assignDriver → dispatchLoad.
+
+### 3.8 user/list — the driver roster (one-time, to build the driver list)
+- **POST** `user/list/{cc}` (v7 base)
+- **Body:**
+  ```json
+  { "pageInfo": { "pageSize": 0, "page": 1, "maxResult": 500 },
+    "searchCriteria": { "name": "", "groupNames": ["-1"], "vendorId": ["-1"],
+      "email": "", "userRoles": ["-1"], "status": "-1", "companyId": "" } }
+  ```
+- **Response:** `{ "totalRecords", "users": [ { "userId", "userName", "firstName", "lastName", "accountStatus", "userRoles": [ { "role" } ], "mobileNumber" } ] }`
+- **Build the driver list:** keep `accountStatus === "ENABLED"` with a `DI_Driver` role. For a clean roster (production DAVIS) also drop office roles: `DI_Dispatcher, MemberAdmin, GroupAdmin, Account_CSR, DI_Biller, ROUTE_ANALYST, CUST_ADMIN, CUST_ASSOCIATE, DWH_USER, DI_Receiver, DI_Inquiry, DI_Integration, DI_User`. **`driverId` = `userId`.** (UAT is a shared sandbox so every account is over-provisioned — there the driver-only filter yields nothing; just use enabled `DI_Driver`.)
+- Upstream calls: **1**. Re-run per tenant; not per dispatch.
+
+### 3.9 The 3-call read scan (loads + stops grids) — optional, for full board reads
+Cheap "where is everything" without per-load reads. **Entity base** (`…/openapi`, *no* `/v7`).
+- **Loads — POST** `entity/filterdata/PkgRoute/{cc}`
+  ```json
+  { "filterList": [ {"sequence":1,"value":"{\"period\":\"0d\"}"},
+      {"sequence":2,"value":"-1"},{"sequence":3,"value":"-1"},
+      {"sequence":4,"value":"-1"},{"sequence":5,"value":"-1"} ],
+    "listDefId":"", "customListDefId": <LOAD_LISTDEF>, "userDefaultFilter": false,
+    "currentPageSize":0, "canDelete":false, "canEdit":false, "canShow":false,
+    "canSelect":true, "page":1, "maxResult":500, "defaultSize":500,
+    "filterArgsJson":{}, "filterValues":[] }
+  ```
+  Response: `{ "filterData":[<col→def>], "values":[[…row…]] }`. Map columns by pattern (`KeyColumn`→loadId, name, status).
+- **Stops — POST** `entity/filterdata/VizzonStop/{cc}` — same envelope, 12 `filterList` sequences (sequence 10 = `{"period":"0d"}`), `customListDefId: <STOP_LISTDEF>`. Each row carries the stop + its load identity (planned vs unplanned).
+- **`customListDefId` is a per-tenant saved-search id** and is **mandatory** (no default — the grid 500s without a valid one). **Production DAVIS** ids (from the davis-nuvizz scans bundle): **loads `35833`, stops `35824`, active saved-search `77128`, completed `77131`, attempts `77203`**. **UAT has different ids** — capture them from a UAT portal HAR (open the Loads + Stops grids, read `customListDefId` from each `entity/filterdata` request) before using this in UAT.
+- ⚠️ Do **not** number-probe load ranges to discover loads — that path costs ~3,000 calls and NuVizz has a runaway/blacklist history. Use the saved-search list-defs (2–3 calls) or known load numbers only.
+
+---
+
+## 4. The stop (order) payload — `STOP_PAYLOAD` for createStop
+
+Built by `buildStopPayload(row, settings)` in `src/lib/nuvizzWrite.js`. Required
+row fields: `name, addr1, city, state, zip` (+ optional `addr2, pallets, cartons,
+weight, pro`). Settings: the origin/depot + service date.
+
+```json
+{
+  "stopNbr": "<your order number>",
+  "stopType": "DO", "shipmentType": "REG", "stopExecution": "APP", "sourceType": "INTG",
+  "shipmentNbr": "<pro?>", "proNumber": "<pro?>", "reference1": "PRO <pro?>",
+  "totalPallets": 1, "totalCartons": null, "weight": null, "weightUOM": "LBS",
+  "from": {
+    "address": { "addressType": "COM", "name": "<origin name>", "addr1": "<origin addr1>",
+      "city": "<origin city>", "state": "<origin st>", "zip": "<origin zip>", "country": "USA" },
+    "schedule": { "timeFrom": "<serviceDate>T08:00:00", "timeTo": "<serviceDate>T12:00:00",
+      "timeZone": "America/New_York", "timeConstraint": "PREFERRED" }
+  },
+  "to": {
+    "address": { "addressType": "COM", "name": "<consignee>", "addr1": "<addr1>", "addr2": "<addr2?>",
+      "city": "<city>", "state": "<st>", "zip": "<zip>", "country": "USA" },
+    "schedule": { "timeFrom": "<serviceDate>T12:00:00", "timeTo": "<serviceDate>T17:00:00",
+      "timeZone": "America/New_York", "timeConstraint": "PREFERRED" }
+  }
+}
+```
+Gotchas (learned live): do **not** send `shipForBP` or `profile` on the open
+import ("ShipForBP is Invalid" / "profile … does not exist"). NuVizz geocodes
+from the address; include a real `zip`.
+
+---
+
+## 5. `toEditHeader` — load/info header → load/edit header (for removeStops)
+
+`load/edit` blanks anything you don't echo. Map the load/info `loadHeader` to:
+`loadId, routeName, routeDesc, scheduleStartDttm (=earliestStartDttm),
+scheduleEndDttm (=latestStartDttm), signatureRequired, rtOrigin, depot, facility,
+masterBol, pronbr, reference, reference2, reference3, sealNbr, totalCartons,
+totalPallets, vehicleType, volume, volumeUOM, weight, weightUOM, cusAccNbr,
+returnToDepot, congestionFactor, sourceType, customAttributes, maxRouteTime,
+shiftType, maxDistMiles, cutOffTime, seqMode:"None"`. (Full mapping in
+`nuvizz-write.cjs` `toEditHeader`.)
+
+---
+
+## 6. Response parsing helpers (in `src/lib/nuvizzWrite.js`)
+- `summarize(resp)` — createStop/insert/remove: ok if `apiResult.created/updated`
+  + `entityInfoList`, or `status==="SUCCESS"`, or 2xx with no `reasons`/`error`.
+  Pulls `entityId`/`entityNbr`. Error text from `reasons[0].description` /
+  `apiResult.errors[0].msgs` / `error` / `message`.
+- `assignOk(resp)` — assign/dispatch: ok if `status` (case-insensitive) `=== "success"`.
+- `normalizeStop(resp)` → `{ stopId, stopNbr, status, assignedLoadNbr, toName, toCity, toState, latitude, longitude }`.
+- `normalizeLoad(resp)` → `{ loadId, loadNbr, routeName, status, versionId, stops:[{stopId,stopNbr,stopSeq,stopType}] }`.
+
+---
+
+## 7. What is **NOT** a NuVizz call (our local state)
+These never touch NuVizz — they're our own stores so the board needs zero reads:
+- **Created-orders registry** — `netlify/functions/orders.cjs` (Netlify Blobs). The
+  list of orders we created (each with its `stopId` + planned load). Source of truth
+  for the board.
+- **Load→driver assignments** — `netlify/functions/assignments.cjs` (Blobs). Board
+  record of who's on each load (mirrors what we dispatched).
+- **loadId cache** (`localStorage dd_loadid_cache`) — loadNbr→loadId, so we resolve a
+  load's id at most once.
+- **Geocode cache** (`dd_geocode_cache`) — addresses→lat/lng via **Google** (not NuVizz).
+- **Known loads** (`src/lib/loads.js`) / **Known drivers** (`src/lib/drivers.js`) — static lists.
+
+The only time we read NuVizz is the on-demand **Sync** (reconcile): `getLoad` each
+known load (~8 calls) to correct planned/unplanned drift. Replace with the §3.9
+3-call scan once you have the tenant list-def ids.
+
+---
+
+## 8. Call counter (optional but recommended)
+`netlify/functions/lib/callCounter.cjs` counts every upstream round-trip at the one
+`nuvizz()` chokepoint into a Blobs key `calls:<ET-day>` `{count, byRoute, byHour}`
+(ET-day key = implicit daily reset). Exposed read-only by `nuvizz-ops.cjs`. Honors
+`NUVIZZ_DAILY_CEILING` (default 1000) + `NUVIZZ_BREAKER_MODE` (monitor/enforce).
+
+---
+
+## 9. PRODUCTION SWITCH CHECKLIST (UAT `DAVISV5` → prod `DAVIS`)
+
+1. **Base URL.** `nuvizz-write.cjs` hard-codes `UAT_BASE = https://uat.nuvizz.com/…`.
+   Change to `https://portal.nuvizz.com/deliverit/openapi/v7` (ideally read from
+   `NUVIZZ_BASE_URL`).
+2. **Remove the prod-tenant guard.** `nuvizz-write.cjs` currently `return 400` when
+   `companyCode === "DAVIS"` (a UAT safety). Delete that check for production.
+3. **Env vars** (Netlify): `NUVIZZ_DAVIS_COMPANY_CODE=DAVIS`, `NUVIZZ_DAVIS_USER`,
+   `NUVIZZ_DAVIS_PASS` (production creds), `NUVIZZ_WRITE_ENABLED=true`.
+4. **Driver roster.** Re-run §3.8 against `DAVIS` → regenerate `src/lib/drivers.js`
+   (clean roster ≈ 60 road drivers; `driverId = userId`).
+5. **Known loads.** Put the real production load numbers in `src/lib/loads.js`
+   (or wire the §3.9 scan to discover them — prod list-def ids are known: loads
+   `35833`, stops `35824`).
+6. **Sanity:** create one order → plan → assign a driver → dispatch on a throwaway
+   prod load, confirm each returns success, before going live.
+
+---
+
+## 10. Not yet captured
+- **Un-assign / un-dispatch** (pull a driver/load back in NuVizz). Likely the same
+  `load/assignanddispatch` endpoint with a different `action`; capture a portal HAR
+  of that action to get the exact payload.
+- **Driver locations / live GPS** — separate (Samsara/Motive), not NuVizz.
+</content>
