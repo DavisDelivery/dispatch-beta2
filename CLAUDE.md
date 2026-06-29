@@ -106,8 +106,12 @@ the incremental reskin), a token theme (`src/styles/theme.css`, HSL vars, dark-f
   `DI_Driver` accounts of the tenant we WRITE to; currently UAT `DAVISV5` = 53. The file header
   documents the `user/list` pull so it's repeatable for the DAVIS prod switch — there the roster is
   clean enough to drop office roles → 60 road drivers). Assignments are server-backed + cross-device via
-  `netlify/functions/assignments.cjs` + `src/hooks/useAssignments.js` (load→driver map in Blobs). This
-  is a board-level association only — NOT yet pushed to NuVizz as a dispatch/tender.
+  `netlify/functions/assignments.cjs` + `src/hooks/useAssignments.js` (load→driver map in Blobs).
+  Picking a driver ALSO dispatches in NuVizz: `usePlanning().dispatchDriver` resolves the load's loadId
+  and calls the write fn's `assignDriver` op → `POST load/assignanddispatch/{cc}`
+  `{action:'ASSIGN_DISPATCH',dispatchRoute:[{routeId:loadId,assignDtls:{driverId}}]}` (driverId = the
+  roster userId in `KNOWN_DRIVERS`). "Unassigned" clears the board record only (NuVizz un-dispatch not
+  yet captured).
 - **Sync (reconcile)**: the registry's `plannedLoadNbr` is local and can drift from NuVizz reality
   (e.g. planned-shows-unplanned). `usePlanning().reconcile()` reads each relevant load (`KNOWN_LOADS`
   + any load an order claims) ONCE via `getLoad` — a scoped, cheap "scan" (NOT the davis-nuvizz
