@@ -197,5 +197,92 @@ export function usePlanning() {
     [orders, resolveLoadId],
   )
 
-  return { orders, plan, unplan, reconcile, dispatchDriver, dispatchLoad, sequenceByLoad, sequenceLoad }
+  // Commit a whole desired board arrangement to NuVizz in one pass (draft → Save).
+  // `desiredByLoad` is an array of [loadNbr, orderedOrders[]] (orders carry stopId);
+  // any planned order not present in it is treated as moved to Unassigned.
+  // Phase 1 unplans every departure (current load ≠ desired). Phase 2 rebuilds each
+  // load to its exact order via keep-first-anchor + remove-rest + insert one-at-a-time
+  // (a single insert appends; bulk would auto-optimize). Cost is bounded by loads
+  // touched, not by how many orders were dragged.
+  const commit = useCallback(
+    async (desiredByLoad) => {
+      const byNbr = new Map(orders.map((o) => [o.stopNbr, o]))
+      const desiredLoadOf = new Map()
+      for (const [loadNbr, list] of desiredByLoad) for (const o of list) desiredLoadOf.set(o.stopNbr, loadNbr)
+
+      const onLoad = new Map() // loadNbr -> Set(stopNbr) currently on the load
+      for (const o of orders)
+        if (o.plannedLoadNbr) {
+          if (!onLoad.has(o.plannedLoadNbr)) onLoad.set(o.plannedLoadNbr, new Set())
+          onLoad.get(o.plannedLoadNbr).add(o.stopNbr)
+        }
+
+      const errors = []
+      let calls = 0
+
+      // Phase 1 — unplan departures (incl. moves to Unassigned).
+      const departByLoad = new Map()
+      for (const o of orders) {
+        const base = o.plannedLoadNbr || null
+        const want = desiredLoadOf.get(o.stopNbr) || null
+        if (base && base !== want && o.stopId) {
+          if (!departByLoad.has(base)) departByLoad.set(base, [])
+          departByLoad.get(base).push(o)
+        }
+      }
+      for (const [loadNbr, list] of departByLoad) {
+        const r = summarize(await removeStops({}, loadNbr, list.map((o) => o.stopId)))
+        calls++
+        if (r.ok) {
+          setPlanned(list.map((o) => o.stopNbr), null)
+          list.forEach((o) => onLoad.get(loadNbr)?.delete(o.stopNbr))
+        } else errors.push(`unplan ${loadNbr}: ${r.message}`)
+      }
+
+      // Phase 2 — rebuild each load to its exact desired order.
+      for (const [loadNbr, ordered] of desiredByLoad) {
+        if (!ordered.length) continue
+        try {
+          const loadId = await resolveLoadId(loadNbr)
+          const cur = onLoad.get(loadNbr) || new Set()
+          const first = ordered[0]
+          if (!cur.has(first.stopNbr)) {
+            const r = summarize(await insertStops({}, loadId, [first.stopId]))
+            calls++
+            if (!r.ok) {
+              errors.push(`${loadNbr} add ${first.stopNbr}: ${r.message}`)
+              continue
+            }
+            cur.add(first.stopNbr)
+          }
+          const removeNbrs = [...cur].filter((n) => n !== first.stopNbr)
+          if (removeNbrs.length) {
+            const r = summarize(await removeStops({}, loadNbr, removeNbrs.map((n) => byNbr.get(n)?.stopId).filter(Boolean)))
+            calls++
+            if (!r.ok) {
+              errors.push(`${loadNbr} reorder: ${r.message}`)
+              continue
+            }
+            removeNbrs.forEach((n) => cur.delete(n))
+          }
+          for (const o of ordered.slice(1)) {
+            const r = summarize(await insertStops({}, loadId, [o.stopId]))
+            calls++
+            if (!r.ok) {
+              errors.push(`${loadNbr} insert ${o.stopNbr}: ${r.message}`)
+              break
+            }
+            cur.add(o.stopNbr)
+          }
+          setPlanned(ordered.map((o) => o.stopNbr), loadNbr)
+        } catch (e) {
+          errors.push(`${loadNbr}: ${e.message}`)
+        }
+      }
+      return { ok: !errors.length, message: errors.length ? errors.join(' · ') : `Committed to NuVizz (${calls} call${calls === 1 ? '' : 's'}).`, calls }
+    },
+    [orders, resolveLoadId, setPlanned],
+  )
+
+  return { orders, plan, unplan, reconcile, dispatchDriver, dispatchLoad, sequenceByLoad, sequenceLoad, commit }
 }
