@@ -48,14 +48,15 @@ const sched = (date, from, to, tz) => ({
   timeConstraint: 'PREFERRED',
 })
 
-// --- Sequencing windows -----------------------------------------------------
-// NuVizz seats a bulk-inserted set by each stop's DELIVERY window (to.schedule
-// timeFrom), NOT by distance — verified live on empty AND non-empty loads. So
-// the visit order is controlled by giving each stop a distinct, ordered delivery
-// window. We hand every stop a 30-minute slot, staggered from FIRST_DELIVERY:
-// stop index 0 -> 08:00–08:30, 1 -> 08:30–09:00, … The origin/pickup window must
-// sit before every delivery slot (NuVizz rejects from > to), so it's pinned to
-// early morning.
+// --- Delivery (ETA) windows -------------------------------------------------
+// Each stop gets a 30-minute delivery slot, staggered by its visit position
+// (index 0 -> 08:00–08:30, 1 -> 08:30–09:00, …). This is the APPOINTMENT/ETA the
+// driver sees — it is NOT the ordering lever. Rigorous live testing showed NuVizz
+// re-optimizes a bulk insert GEOGRAPHICALLY and ignores delivery windows entirely;
+// visit order is set only by one-at-a-time insertion (see usePlanning). We keep the
+// slots aligned to the chosen sequence so the ETA matches the route position. The
+// origin/pickup window must sit before every delivery slot (NuVizz rejects
+// from > to), so it's pinned to early morning.
 const FIRST_DELIVERY = '08:00' // first delivery slot start (local)
 const SLOT_MIN = 30 // minutes per stop
 const ORIGIN_WINDOW = { from: '06:00:00', to: '07:00:00' } // before all delivery slots
@@ -124,9 +125,9 @@ const addrPayload = (a) => ({
 // internal values ("ShipForBP is Invalid" / "profile … does not exist").
 export function buildStopPayload(row, s) {
   const stopNbr = clean(row.stopNbr) || clean(row.pro) || `ORD-${row._seq ?? ''}`
-  // Each stop gets a distinct 30-minute delivery window staggered by its row
-  // position, so a bulk insert seats the load in this exact order. The pickup
-  // window is pinned to early morning (before every delivery slot).
+  // Each stop gets a 30-minute delivery window staggered by its row position — the
+  // appointment/ETA shown to the driver (NOT the ordering lever; see §10). The
+  // pickup window is pinned to early morning (before every delivery slot).
   const slot = deliverySlot(row._index ?? 0)
   return {
     stopNbr,
@@ -166,9 +167,10 @@ export function buildStopPayload(row, s) {
   }
 }
 
-// Re-window a stop to encode its visit position (0-based `index`) as a 30-minute
-// delivery slot — the source of truth NuVizz seats by. A PARTIAL upsert blanks
-// the destination address, so we always send a full stop payload. When the order
+// Stamp a stop with the 30-minute delivery slot for its visit position (0-based
+// `index`) — the displayed ETA, kept aligned to the route order (it does NOT drive
+// order; see §10). A PARTIAL upsert blanks the destination address, so we always
+// send a full stop payload. When the order
 // already carries its address + serviceDate (created in-app) we rebuild from it
 // (1 NuVizz call); otherwise we read the stop first to preserve addr2 and its
 // service date (2 calls). The origin window is pinned before the delivery slot.

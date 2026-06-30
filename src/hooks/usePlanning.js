@@ -163,12 +163,13 @@ export function usePlanning() {
     }
   }, [resolveLoadId])
 
-  // Set a load's stop order in NuVizz to exactly `orderedStopNbrs`. NuVizz seats a
-  // bulk insert by each stop's DELIVERY window (verified live), so we encode the
-  // order as 30-minute delivery slots (the source of truth the driver also sees),
-  // then rebuild: keep the first desired stop as an anchor (removing ALL stops
-  // cancels the route), remove the rest, and re-insert them in ONE bulk call —
-  // they seat after the anchor in window order. Cost = N (window sets) + 2.
+  // Set a load's stop order in NuVizz to exactly `orderedStopNbrs`.
+  // ORDER MECHANISM (verified live): a BULK insertStops gets re-optimized by NuVizz
+  // geographically (it ignores both array order AND delivery windows). The only
+  // reliable control is a ONE-AT-A-TIME insert, which APPENDS each stop — so the
+  // final order is exactly the insertion order. We also stamp each stop with a
+  // 30-minute delivery slot in that same order, so the driver's ETA matches the
+  // route position (the window is the displayed appointment, NOT the ordering lever).
   const sequenceLoad = useCallback(
     async (loadNbr, orderedStopNbrs) => {
       const byNbr = new Map(orders.map((o) => [o.stopNbr, o]))
@@ -177,21 +178,23 @@ export function usePlanning() {
       try {
         const loadId = await resolveLoadId(loadNbr)
         let calls = 0
-        // 1) Window-encode the desired order onto each stop.
+        // 1) Stamp sequence-aligned 30-min ETA windows (cosmetic; does not set order).
         for (let i = 0; i < items.length; i++) {
           const r = await setStopWindow({}, items[i], i)
           calls++
           if (!r.ok) return { ok: false, message: `Window ${items[i].stopNbr}: ${r.message}` }
         }
-        // 2) Rebuild: keep the first stop as anchor, remove the rest, bulk re-insert.
+        // 2) Rebuild: keep the first stop as anchor (removing ALL stops cancels the
+        //    route), remove the rest, then re-insert one-at-a-time in order (a single
+        //    insert appends, so the final order is exactly [first, …rest]).
         const [first, ...rest] = items
         const rem = summarize(await removeStops({}, loadNbr, rest.map((o) => o.stopId)))
         calls++
         if (!rem.ok) return { ok: false, message: `Couldn’t reorder: ${rem.message}` }
-        if (rest.length) {
-          const ins = summarize(await insertStops({}, loadId, rest.map((o) => o.stopId)))
+        for (const o of rest) {
+          const r = summarize(await insertStops({}, loadId, [o.stopId]))
           calls++
-          if (!ins.ok) return { ok: false, message: `Re-insert failed: ${ins.message}` }
+          if (!r.ok) return { ok: false, message: `Re-inserting ${o.stopNbr} failed: ${r.message}` }
         }
         void first
         // optimistic local order so the board reflects it before the next reconcile
@@ -207,10 +210,11 @@ export function usePlanning() {
   // Commit a whole desired board arrangement to NuVizz in one pass (draft → Save).
   // `desiredByLoad` is an array of [loadNbr, orderedOrders[]] (orders carry stopId);
   // any planned order not present in it is treated as moved to Unassigned.
-  // Phase 1 unplans every departure (current load ≠ desired). Phase 2 window-encodes
-  // each load's desired order as 30-minute delivery slots (the source of truth NuVizz
-  // seats by) then rebuilds it via keep-first-anchor + remove-rest + one bulk insert
-  // (the bulk seats in window order). Cost is bounded by loads touched + their stops.
+  // Phase 1 unplans every departure (current load ≠ desired). Phase 2 stamps each
+  // load's stops with sequence-aligned 30-min ETA windows (cosmetic) then rebuilds it
+  // to the exact desired order via keep-first-anchor + remove-rest + insert
+  // ONE-AT-A-TIME (a bulk insert gets geo-reoptimized; a single insert appends, so
+  // insertion order IS the final order). Cost is bounded by loads touched + their stops.
   const commit = useCallback(
     async (desiredByLoad) => {
       const byNbr = new Map(orders.map((o) => [o.stopNbr, o]))
@@ -251,7 +255,7 @@ export function usePlanning() {
         if (!ordered.length) continue
         try {
           const loadId = await resolveLoadId(loadNbr)
-          // Window-encode the desired order onto every stop (NuVizz seats by it).
+          // Stamp sequence-aligned 30-min ETA windows (cosmetic; does not set order).
           let windowFailed = false
           for (let i = 0; i < ordered.length; i++) {
             const r = await setStopWindow({}, ordered[i], i)
@@ -284,18 +288,21 @@ export function usePlanning() {
             }
             removeNbrs.forEach((n) => cur.delete(n))
           }
-          // Bulk re-insert the rest in one call — they seat after the anchor in
-          // window order (verified live on non-empty loads).
-          const restIds = ordered.slice(1).map((o) => o.stopId).filter(Boolean)
-          if (restIds.length) {
-            const r = summarize(await insertStops({}, loadId, restIds))
+          // Re-insert the rest ONE-AT-A-TIME, in order — a single insert appends, so
+          // the final sequence is exactly `ordered` (a bulk insert would be geo-
+          // reoptimized and lose the dispatcher's order).
+          let insertFailed = false
+          for (const o of ordered.slice(1)) {
+            const r = summarize(await insertStops({}, loadId, [o.stopId]))
             calls++
             if (!r.ok) {
-              errors.push(`${loadNbr} insert: ${r.message}`)
-              continue
+              errors.push(`${loadNbr} insert ${o.stopNbr}: ${r.message}`)
+              insertFailed = true
+              break
             }
-            ordered.slice(1).forEach((o) => cur.add(o.stopNbr))
+            cur.add(o.stopNbr)
           }
+          if (insertFailed) continue
           setSequenceByLoad((m) => ({ ...m, [loadNbr]: ordered.map((o) => o.stopNbr) }))
           setPlanned(ordered.map((o) => o.stopNbr), loadNbr)
         } catch (e) {
