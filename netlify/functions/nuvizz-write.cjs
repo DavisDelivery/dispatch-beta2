@@ -200,6 +200,38 @@ exports.handler = async (event) => {
         const r = await nuvizz('POST', `load/edit/${cc}`, auth, payload)
         return json(200, r)
       }
+      case 'staticList': {
+        // List the recurring (static) route templates. Each carries a routeId we
+        // can generate a fresh dated load instance from.
+        const r = await nuvizz('POST', `load/static/list/${cc}`, auth, {
+          pageSize: 0,
+          page: 1,
+          maxResult: req.maxResult || 500,
+        })
+        return json(200, r)
+      }
+      case 'generateInstance': {
+        // Generate fresh dated load instance(s) from static route template id(s).
+        const { routeIds } = req
+        if (!Array.isArray(routeIds) || !routeIds.length) {
+          return json(400, { error: 'generateInstance needs routeIds[]' })
+        }
+        const r = await nuvizz('POST', `load/instance/update/${cc}`, auth, { routeIds })
+        return json(200, r)
+      }
+      case 'cancelLoad': {
+        // Cancel a load cleanly (preferred teardown — removing all stops also
+        // cancels but is messier).
+        const { loadNbr, loadId } = req
+        if (!loadNbr && !loadId) return json(400, { error: 'cancelLoad needs loadNbr or loadId' })
+        const r = await nuvizz('POST', `load/cancel/${cc}`, auth, {
+          loadNbr,
+          loadId,
+          reasonCode: req.reasonCode || 'OTH',
+          reasonComments: req.reasonComments || 'test teardown',
+        })
+        return json(200, r)
+      }
       case 'assignDriver': {
         // Assign + dispatch a driver to a load (route). routeId = the load's
         // loadId; driverId = the driver's roster userId. Mirrors the portal's
