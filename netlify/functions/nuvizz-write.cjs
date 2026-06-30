@@ -200,6 +200,15 @@ exports.handler = async (event) => {
         const r = await nuvizz('POST', `load/edit/${cc}`, auth, payload)
         return json(200, r)
       }
+      case 'routePlanUpdate': {
+        // Create/Update a Route Plan — the spec's 1-call "send the full ordered
+        // route" endpoint. route.planStops[].to.seq encodes the visit order.
+        const { route, serviceName } = req
+        if (!route) return json(400, { error: 'routePlanUpdate needs route' })
+        const svc = encodeURIComponent(serviceName || 'default')
+        const r = await nuvizz('POST', `routePlan/update/${svc}/${cc}`, auth, { companyCode, route })
+        return json(200, r)
+      }
       case 'stopPartialUpdate': {
         // Write a stop's fields directly (e.g. stopSeq) without a full re-import.
         // Each stop needs at least stopId. UNTESTED for sequencing — exploratory.
