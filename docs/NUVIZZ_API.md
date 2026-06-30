@@ -309,10 +309,23 @@ locally (zero calls), then commit — Phase 1 unplans departures, Phase 2 rebuil
 load to its exact desired order (anchor + remove-rest + one-at-a-time re-insert). Cost is bounded
 by *loads touched + their stops*, not by how many moves were dragged.
 
-**Possible cheaper path (untested):** every reorder above forces `seqMode:'None'` via the
-`load/edit` header echo (so the optimizer re-sorts). Setting the load header to **`seqMode:'Manual'`**
-*might* make NuVizz honor insertion order for a bulk insert (1 call instead of N). Not yet verified —
-worth a controlled test before relying on it.
+**`seqMode:'Manual'` does NOT give a cheaper path (tested, ruled out).** Exhaustively tested on
+**5 fresh empty loads** (`setSeqMode` op + the portal's own Manual toggle), both `STRICT` and
+`PREFERRED` windows:
+- Manual + **bulk insert** still reorders — inserting `[GVL,KEN,AUS,ATL]` came back `GVL,AUS,KEN,ATL`
+  (ends right, middle swapped). It honors neither insertion order nor ETA.
+- Manual + **single insert** still **appends** — a stop whose ETA sits between two seated stops
+  lands last, not between (immediately and after an 8s recheck).
+- Window constraint (`STRICT` vs `PREFERRED`) made **no difference** to either.
+
+Conclusion: **no load setting or window trick makes a bulk/single insert honor an order** on the
+clean Basic-auth API. One-at-a-time insertion (above) is the only reliable lever. The portal's
+drag-to-reorder / ETA ordering runs through its internal **session-gated** resequence endpoints
+(see below), which Basic auth can't reach — that's why ordering "works in the portal" but not here.
+
+> ⚠️ Note: `removeStops` (our `load/edit` echo) resets the load to `seqMode:'None'`. The
+> `setSeqMode` op (`load/edit` with a chosen mode) sets it, but `load/info` does **not** echo
+> `seqMode` back, so it's a write-only black box — you can't read the current mode.
 
 **Dead ends / gated (don't waste time):**
 - `load/edit` has a documented `routeSeq: [{stopNbr, sequence, …}]` field — it is a
