@@ -248,9 +248,66 @@ known load (~8 calls) to correct planned/unplanned drift. Replace with the §3.9
 
 ---
 
-## 10. Not yet captured
-- **Un-assign / un-dispatch** (pull a driver/load back in NuVizz). Likely the same
-  `load/assignanddispatch` endpoint with a different `action`; capture a portal HAR
-  of that action to get the exact payload.
-- **Driver locations / live GPS** — separate (Samsara/Motive), not NuVizz.
+## 10. Stop SEQUENCING (manual order) — tested, works on the clean API
+
+The order a driver visits stops is `stop.to.seq` on a load (1 = origin pickup,
+2..N = deliveries). `normalizeLoad` surfaces it as `seq`. Array order is unreliable;
+always sort by `to.seq`. The load header's **`seqMode`** controls how NuVizz orders:
+`Far` (farthest first) · `Near` (nearest first) · `None` (shortest-path) · `Manual`.
+
+**How NuVizz assigns sequence on `insertStops` (verified live):**
+- **Bulk insert** (array of stopIds in one call) → NuVizz **auto-optimizes** (per `seqMode`).
+- **One-at-a-time insert** (one call per stop) → NuVizz **APPENDS** each to the end.
+
+So **manual sequencing = insert one stop at a time, in the desired order.** Confirmed:
+adding A,B,C,D one-at-a-time yields `to.seq` 2,3,4,5 in exactly that order.
+
+**Re-sequencing an existing load** (`usePlanning.sequenceLoad` / the `commit` engine):
+1. ⚠️ **Removing ALL stops cancels the route** ("Cannot insert stops to a Cancelled
+   route"). So keep the FIRST desired stop as an **anchor**.
+2. `removeStops` the rest, then `insertStops` them **one-at-a-time** in order.
+3. Cost ≈ `2 + (N−1)` calls. Verified: BEFORE `[MIGHTYLEO,CMC,KIK,CARVANA]` →
+   WANT/GOT `[CARVANA,KIK,CMC,MIGHTYLEO]`.
+
+**Draft → Save (batch) pattern** (`usePlanning.commit`): stage all moves/reorders
+locally (zero calls), then commit — Phase 1 unplans departures, Phase 2 rebuilds each
+touched load with the anchor method. Cost is bounded by *loads touched*, not moves.
+
+**Dead ends / gated (don't waste time):**
+- `load/edit` has a documented `routeSeq: [{stopNbr, sequence, …}]` field — it is a
+  **no-op** (200, no effect). Tested every shape. Do not use it.
+- `routePlan/update/{serviceName}/{cc}` IS the clean 1-call "send full ordered route"
+  endpoint (`{companyCode, route:{loadHeader, planStops:[{stopNbr, from:{seq,schedule},
+  to:{seq,schedule}}]}}`, example `RouteExistingStops`). Our payload is correct (the
+  wrapper validates), but it **500s "deliverItLoad is null"** — the `default` route-plan
+  service isn't wired for the tenant. **Needs NuVizz to enable the route-plan integration
+  service** (or a real `serviceName`); then it's a clean one-call save.
+- The portal's Route Workbench (`dirouteworkbench/*`, `opt-job/routeopt/resequenceRoute`,
+  `resequenceBuildManualRoute`, `saveComparedRouteData`) does 1-call sequencing/optimize,
+  but is **session cookie + CSRF** only (rejects Basic auth, 401). Would need a server-side
+  portal-login layer (login HAR required).
+
+## 11. Route OPTIMIZATION — do it yourself
+
+**NuVizz's optimizer is poor.** Measured on 8 metro-Atlanta stops: NuVizz `seqMode None`
+gave **280.7 road-mi / 385 min**; a naive nearest-neighbor gave **159.7 mi / 261 min**
+(43% shorter). So **don't use their optimizer** — compute the order locally (nearest-
+neighbor + 2-opt, or your own), then apply it via the manual sequencing above.
+
+NuVizz still computes **road-accurate** distance/time (OSRM) for *whatever* order you set:
+after applying an order, `load/info`'s `loadExecutionInfo` returns `plannedDistanceMiles`,
+`plannedDriveTime`, `plannedDuration`. Read those to score routes — road-accurate metrics,
+your sequencing, zero dependence on their optimizer.
+
+## 12. Not yet wired
+- **Un-dispatch / un-assign driver**: `POST /load/unassign/driver/{cc}` and
+  `/load/assign/driver/{cc}` exist on the clean API (return 400 "missing info" on empty
+  body, i.e. reachable). Get the request shape from the OpenAPI spec
+  (`developer.nuvizzapps.com/v7/webservices.html`) or a portal HAR.
+- **Live GPS / ELD** — separate (Samsara/Motive), not NuVizz.
+
+> The full v7 catalog (164 endpoints) is the ReDoc page at
+> `https://developer.nuvizzapps.com/v7/webservices.html` (download the OpenAPI spec for
+> request schemas + examples). Almost the entire platform is on this clean Basic-auth
+> surface — only the Route Workbench optimize/save UI calls are session-gated.
 </content>
