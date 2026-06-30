@@ -48,11 +48,86 @@ const sched = (date, from, to, tz) => ({
   timeConstraint: 'PREFERRED',
 })
 
+// --- Sequencing windows -----------------------------------------------------
+// NuVizz seats a bulk-inserted set by each stop's DELIVERY window (to.schedule
+// timeFrom), NOT by distance — verified live on empty AND non-empty loads. So
+// the visit order is controlled by giving each stop a distinct, ordered delivery
+// window. We hand every stop a 30-minute slot, staggered from FIRST_DELIVERY:
+// stop index 0 -> 08:00–08:30, 1 -> 08:30–09:00, … The origin/pickup window must
+// sit before every delivery slot (NuVizz rejects from > to), so it's pinned to
+// early morning.
+const FIRST_DELIVERY = '08:00' // first delivery slot start (local)
+const SLOT_MIN = 30 // minutes per stop
+const ORIGIN_WINDOW = { from: '06:00:00', to: '07:00:00' } // before all delivery slots
+
+// Default pickup/origin — the Davis warehouse. Used when a settings origin or a
+// read-back origin is unavailable.
+export const DEFAULT_ORIGIN = {
+  name: 'ULINEUAT',
+  addr1: '943 GAINESVILLE HWY',
+  addr2: '200-400',
+  city: 'BUFORD',
+  state: 'GA',
+  zip: '30518',
+}
+
+const pad2 = (n) => String(n).padStart(2, '0')
+const hhmmToMin = (s) => {
+  const [h, m] = String(s).split(':').map(Number)
+  return (h || 0) * 60 + (m || 0)
+}
+const minToHms = (t) => {
+  const c = Math.max(0, Math.min(t, 23 * 60 + 30)) // clamp inside the day
+  return `${pad2(Math.floor(c / 60))}:${pad2(c % 60)}:00`
+}
+
+// 30-minute delivery slot for a 0-based visit index (the order's position).
+export function deliverySlot(index, { first = FIRST_DELIVERY, minutes = SLOT_MIN } = {}) {
+  const start = hhmmToMin(first) + (index | 0) * minutes
+  return { from: minToHms(start), to: minToHms(start + minutes) }
+}
+
+// NuVizz returns some states as full names ("GEORGIA"); the create wants the
+// 2-letter abbreviation. Pass-through anything already ≤2 chars.
+const US_STATES = {
+  ALABAMA: 'AL', ALASKA: 'AK', ARIZONA: 'AZ', ARKANSAS: 'AR', CALIFORNIA: 'CA',
+  COLORADO: 'CO', CONNECTICUT: 'CT', DELAWARE: 'DE', FLORIDA: 'FL', GEORGIA: 'GA',
+  HAWAII: 'HI', IDAHO: 'ID', ILLINOIS: 'IL', INDIANA: 'IN', IOWA: 'IA', KANSAS: 'KS',
+  KENTUCKY: 'KY', LOUISIANA: 'LA', MAINE: 'ME', MARYLAND: 'MD', MASSACHUSETTS: 'MA',
+  MICHIGAN: 'MI', MINNESOTA: 'MN', MISSISSIPPI: 'MS', MISSOURI: 'MO', MONTANA: 'MT',
+  NEBRASKA: 'NE', NEVADA: 'NV', 'NEW HAMPSHIRE': 'NH', 'NEW JERSEY': 'NJ',
+  'NEW MEXICO': 'NM', 'NEW YORK': 'NY', 'NORTH CAROLINA': 'NC', 'NORTH DAKOTA': 'ND',
+  OHIO: 'OH', OKLAHOMA: 'OK', OREGON: 'OR', PENNSYLVANIA: 'PA', 'RHODE ISLAND': 'RI',
+  'SOUTH CAROLINA': 'SC', 'SOUTH DAKOTA': 'SD', TENNESSEE: 'TN', TEXAS: 'TX',
+  UTAH: 'UT', VERMONT: 'VT', VIRGINIA: 'VA', WASHINGTON: 'WA', 'WEST VIRGINIA': 'WV',
+  WISCONSIN: 'WI', WYOMING: 'WY',
+}
+export const abbrState = (s) => {
+  if (!s) return s
+  const u = String(s).trim().toUpperCase()
+  return u.length <= 2 ? u : US_STATES[u] || u.slice(0, 2)
+}
+
+const addrPayload = (a) => ({
+  addressType: 'COM',
+  name: clip(clean(a.name), 50),
+  addr1: clean(a.addr1),
+  addr2: clean(a.addr2),
+  city: clean(a.city),
+  state: abbrState(clean(a.state)),
+  zip: clean(a.zip),
+  country: 'USA',
+})
+
 // Build a NuVizz stop (order) payload from a flat form row + shared settings.
 // NOTE: intentionally NO shipForBP and NO profile — the open import rejects the
 // internal values ("ShipForBP is Invalid" / "profile … does not exist").
 export function buildStopPayload(row, s) {
   const stopNbr = clean(row.stopNbr) || clean(row.pro) || `ORD-${row._seq ?? ''}`
+  // Each stop gets a distinct 30-minute delivery window staggered by its row
+  // position, so a bulk insert seats the load in this exact order. The pickup
+  // window is pinned to early morning (before every delivery slot).
+  const slot = deliverySlot(row._index ?? 0)
   return {
     stopNbr,
     stopType: 'DO',
@@ -67,31 +142,64 @@ export function buildStopPayload(row, s) {
     weight: num(row.weight),
     weightUOM: s.weightUOM || 'LBS',
     from: {
-      address: {
-        addressType: 'COM',
-        name: s.originName,
-        addr1: s.originAddr1,
-        city: s.originCity,
-        state: s.originState,
-        zip: s.originZip,
-        country: 'USA',
-      },
-      schedule: sched(s.serviceDate, '08:00:00', '12:00:00', s.timeZone),
+      address: addrPayload({
+        name: clean(s.originName) || DEFAULT_ORIGIN.name,
+        addr1: clean(s.originAddr1) || DEFAULT_ORIGIN.addr1,
+        addr2: clean(s.originAddr2) || DEFAULT_ORIGIN.addr2,
+        city: clean(s.originCity) || DEFAULT_ORIGIN.city,
+        state: clean(s.originState) || DEFAULT_ORIGIN.state,
+        zip: clean(s.originZip) || DEFAULT_ORIGIN.zip,
+      }),
+      schedule: sched(s.serviceDate, ORIGIN_WINDOW.from, ORIGIN_WINDOW.to, s.timeZone),
     },
     to: {
-      address: {
-        addressType: 'COM',
-        name: clip(clean(row.name), 50),
+      address: addrPayload({
+        name: clean(row.name),
         addr1: clean(row.addr1),
         addr2: clean(row.addr2),
         city: clean(row.city),
         state: clean(row.state),
         zip: clean(row.zip),
-        country: 'USA',
-      },
-      schedule: sched(s.serviceDate, '12:00:00', '17:00:00', s.timeZone),
+      }),
+      schedule: sched(s.serviceDate, slot.from, slot.to, s.timeZone),
     },
   }
+}
+
+// Re-window a stop to encode its visit position (0-based `index`) as a 30-minute
+// delivery slot — the source of truth NuVizz seats by. A PARTIAL upsert blanks
+// the destination address, so we always send a full stop payload. When the order
+// already carries its address + serviceDate (created in-app) we rebuild from it
+// (1 NuVizz call); otherwise we read the stop first to preserve addr2 and its
+// service date (2 calls). The origin window is pinned before the delivery slot.
+export async function setStopWindow(creds, order, index, opts = {}) {
+  let to, origin, date
+  const haveAddr = order && order.addr1 && order.city && order.state && order.zip
+  if (haveAddr && order.serviceDate) {
+    to = { name: order.name, addr1: order.addr1, addr2: order.addr2, city: order.city, state: order.state, zip: order.zip }
+    origin = opts.origin || DEFAULT_ORIGIN
+    date = order.serviceDate
+  } else {
+    const st = (await getStop(creds, order.stopNbr))?.data?.Stop?.stop
+    const a = st?.to?.address
+    if (!a) return { ok: false, message: `Stop ${order.stopNbr} not found` }
+    const fa = st.from?.address || {}
+    to = { name: a.name, addr1: a.addr1, addr2: a.addr2, city: a.city, state: a.state, zip: a.zip }
+    origin = { name: fa.name, addr1: fa.addr1, addr2: fa.addr2, city: fa.city, state: fa.state, zip: fa.zip }
+    date = (st.to?.schedule?.timeFrom || st.from?.schedule?.timeFrom || '').slice(0, 10)
+  }
+  if (!date) return { ok: false, message: `No service date for ${order.stopNbr}` }
+  const slot = deliverySlot(index, opts)
+  const stop = {
+    stopNbr: order.stopNbr,
+    stopType: 'DO',
+    shipmentType: 'REG',
+    stopExecution: 'APP',
+    sourceType: 'INTG',
+    from: { address: addrPayload(origin), schedule: sched(date, ORIGIN_WINDOW.from, ORIGIN_WINDOW.to) },
+    to: { address: addrPayload(to), schedule: sched(date, slot.from, slot.to) },
+  }
+  return summarize(await createOrder(creds, stop))
 }
 
 // Pull a friendly success/error summary out of the upstream NuVizz response.

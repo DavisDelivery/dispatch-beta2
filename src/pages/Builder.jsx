@@ -108,6 +108,7 @@ function SettingsBar({ settings, setSettings }) {
       <div className="wb-grid wb-grid--4" style={{ marginTop: 10 }}>
         <label className="wb-field"><span>Pickup name</span><input value={settings.originName} onChange={set('originName')} /></label>
         <label className="wb-field"><span>Pickup addr1</span><input value={settings.originAddr1} onChange={set('originAddr1')} /></label>
+        <label className="wb-field"><span>Pickup addr2</span><input value={settings.originAddr2 || ''} onChange={set('originAddr2')} /></label>
         <label className="wb-field"><span>Pickup city</span><input value={settings.originCity} onChange={set('originCity')} /></label>
         <label className="wb-field"><span>ST / Zip</span>
           <span style={{ display: 'flex', gap: 6 }}>
@@ -148,7 +149,7 @@ function CreateOrders({ creds, settings, canWrite, onCreated }) {
     setResults({})
     for (let i = 0; i < rows.length; i++) {
       try {
-        const stop = buildStopPayload({ ...rows[i], _seq: `${Date.now()}-${i}` }, settings)
+        const stop = buildStopPayload({ ...rows[i], _seq: `${Date.now()}-${i}`, _index: i }, settings)
         const resp = await createOrder(creds, stop)
         const s = summarize(resp)
         setResults((p) => ({ ...p, [i]: { ok: s.ok, msg: s.ok ? `created · ${s.entityNbr || ''}` : s.message, stopId: s.entityId } }))
@@ -158,12 +159,15 @@ function CreateOrders({ creds, settings, canWrite, onCreated }) {
             stopId: s.entityId,
             name: rows[i].name,
             addr1: rows[i].addr1,
+            addr2: rows[i].addr2,
             city: rows[i].city,
             state: rows[i].state,
             zip: rows[i].zip,
             pallets: rows[i].pallets,
             cartons: rows[i].cartons,
             weight: rows[i].weight,
+            // serviceDate lets us re-window the stop later without a read.
+            serviceDate: settings.serviceDate,
           })
         }
       } catch (err) {
@@ -405,7 +409,8 @@ export default function Builder() {
   const [settings, setSettings] = useState(() =>
     load(SETTINGS_KEY, {
       originName: 'ULINEUAT',
-      originAddr1: '943 GAINESVILLE HIGHWAY',
+      originAddr1: '943 GAINESVILLE HWY',
+      originAddr2: '200-400',
       originCity: 'BUFORD',
       originState: 'GA',
       originZip: '30518',
