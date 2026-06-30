@@ -60,7 +60,9 @@ async function nuvizz(method, path, auth, body) {
 
 // Map a /load/info loadHeader into the /load/edit header shape. load/edit is a
 // FULL replace — echo every field back or it gets blanked (depot/volume etc.).
-function toEditHeader(h) {
+// seqMode defaults to 'None' (NuVizz shortest-path optimizer); pass an override
+// to e.g. 'Manual' so NuVizz preserves the order we set instead of re-optimizing.
+function toEditHeader(h, seqMode = 'None') {
   if (!h) return {}
   return {
     loadId: h.loadId,
@@ -94,7 +96,7 @@ function toEditHeader(h) {
     shiftType: h.shiftType,
     maxDistMiles: h.maxDistMiles,
     cutOffTime: h.cutOffTime,
-    seqMode: 'None',
+    seqMode,
   }
 }
 
@@ -174,6 +176,24 @@ exports.handler = async (event) => {
         const payload = {
           loadHeader: toEditHeader(header),
           removeStopIds,
+          routeSeq: [],
+          versionId: String(L.versionId || ''),
+        }
+        const r = await nuvizz('POST', `load/edit/${cc}`, auth, payload)
+        return json(200, r)
+      }
+      case 'setSeqMode': {
+        // Set a load's optimizer mode (e.g. 'Manual' so NuVizz keeps the order we
+        // set instead of re-optimizing). load/info -> load/edit header echo, no stops.
+        const { loadNbr, seqMode } = req
+        if (!loadNbr || !seqMode) return json(400, { error: 'setSeqMode needs loadNbr and seqMode' })
+        const info = await nuvizz('GET', `load/info/${encodeURIComponent(loadNbr)}/${cc}`, auth)
+        const L = (info.data && (info.data.Load || info.data.load)) || info.data || {}
+        const header = L.loadHeader
+        if (!header) return json(400, { error: `Load ${loadNbr} not found`, detail: info.data })
+        const payload = {
+          loadHeader: toEditHeader(header, seqMode),
+          removeStopIds: [],
           routeSeq: [],
           versionId: String(L.versionId || ''),
         }
