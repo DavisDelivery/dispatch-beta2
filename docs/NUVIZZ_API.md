@@ -162,20 +162,26 @@ weight, pro`). Settings: the origin/depot + service date.
   "from": {
     "address": { "addressType": "COM", "name": "<origin name>", "addr1": "<origin addr1>",
       "city": "<origin city>", "state": "<origin st>", "zip": "<origin zip>", "country": "USA" },
-    "schedule": { "timeFrom": "<serviceDate>T08:00:00", "timeTo": "<serviceDate>T12:00:00",
+    "schedule": { "timeFrom": "<serviceDate>T06:00:00", "timeTo": "<serviceDate>T07:00:00",
       "timeZone": "America/New_York", "timeConstraint": "PREFERRED" }
   },
   "to": {
     "address": { "addressType": "COM", "name": "<consignee>", "addr1": "<addr1>", "addr2": "<addr2?>",
       "city": "<city>", "state": "<st>", "zip": "<zip>", "country": "USA" },
-    "schedule": { "timeFrom": "<serviceDate>T12:00:00", "timeTo": "<serviceDate>T17:00:00",
+    "schedule": { "timeFrom": "<serviceDate>T08:00:00", "timeTo": "<serviceDate>T08:30:00",
       "timeZone": "America/New_York", "timeConstraint": "PREFERRED" }
   }
 }
 ```
+The **`to.schedule` is a 30-minute delivery slot staggered by the stop's visit index**
+(`deliverySlot(index)`): index 0 → 08:00–08:30, 1 → 08:30–09:00, … This encodes the visit
+order so a bulk `insertStops` seats the load correctly (see §10). The **`from.schedule`** (pickup)
+is pinned to **06:00–07:00**, before every delivery slot (NuVizz rejects `from > to`).
+
 Gotchas (learned live): do **not** send `shipForBP` or `profile` on the open
 import ("ShipForBP is Invalid" / "profile … does not exist"). NuVizz geocodes
-from the address; include a real `zip`.
+from the address; include a real `zip`. A PARTIAL upsert (just `stopNbr` + `to.schedule`)
+**replaces the destination address with the origin** — always send the full payload.
 
 ---
 
@@ -256,22 +262,38 @@ always sort by `to.seq`. The load header's **`seqMode`** controls how NuVizz ord
 `Far` (farthest first) · `Near` (nearest first) · `None` (shortest-path) · `Manual`.
 
 **How NuVizz assigns sequence on `insertStops` (verified live):**
-- **Bulk insert** (array of stopIds in one call) → NuVizz **auto-optimizes** (per `seqMode`).
-- **One-at-a-time insert** (one call per stop) → NuVizz **APPENDS** each to the end.
+- A bulk `insertStops` seats the set by **each stop's DELIVERY window** (`to.schedule.timeFrom`),
+  NOT by distance — confirmed on both empty and non-empty loads. (Without distinct windows it
+  falls back to auto-optimize per `seqMode`; a one-at-a-time insert simply APPENDS.)
 
-So **manual sequencing = insert one stop at a time, in the desired order.** Confirmed:
-adding A,B,C,D one-at-a-time yields `to.seq` 2,3,4,5 in exactly that order.
+So **manual sequencing = encode the order into the delivery windows, then bulk insert.**
+We hand every stop a **30-minute delivery slot** staggered by its visit position
+(`deliverySlot(index)` in `src/lib/nuvizzWrite.js`): index 0 → 08:00–08:30, 1 → 08:30–09:00, …
+The driver/customer ETA the dispatcher sees IS the sequence — windows are the source of truth.
+
+**Setting a stop's window** (`setStopWindow`): a PARTIAL `stop/sync/update` (just `stopNbr` +
+`to.schedule`) **blanks/replaces the destination address** — so always send a FULL stop payload.
+When the order carries its address + `serviceDate` (created in-app) we rebuild from it (1 call);
+otherwise we read the stop first to preserve `addr2` + its date (2 calls). ⚠️ The origin/pickup
+window must sit **before** every delivery slot (NuVizz rejects `from > to`), so it's pinned to
+06:00–07:00.
 
 **Re-sequencing an existing load** (`usePlanning.sequenceLoad` / the `commit` engine):
-1. ⚠️ **Removing ALL stops cancels the route** ("Cannot insert stops to a Cancelled
-   route"). So keep the FIRST desired stop as an **anchor**.
-2. `removeStops` the rest, then `insertStops` them **one-at-a-time** in order.
-3. Cost ≈ `2 + (N−1)` calls. Verified: BEFORE `[MIGHTYLEO,CMC,KIK,CARVANA]` →
-   WANT/GOT `[CARVANA,KIK,CMC,MIGHTYLEO]`.
+1. `setStopWindow` each stop to its 30-min slot for the desired order.
+2. ⚠️ **Removing ALL stops cancels the route** ("Cannot insert stops to a Cancelled route"),
+   so keep the FIRST desired stop as an **anchor**; `removeStops` the rest.
+3. `insertStops` the rest in ONE bulk call — they seat after the anchor in window order.
+4. Cost ≈ `N (windows) + 2`. Verified: anchor `ALPHA(08:00)` + bulk-insert `[BRAVO(09:00),
+   CHARLIE(08:30)]` (array order reversed) → seats `ALPHA → CHARLIE → BRAVO` (window order).
+
+**Bake-at-create shortcut:** `buildStopPayload` already stamps the 30-min slot at create time
+(by paste-row index), so a fresh-load plan (`plan` / a single bulk `insertStops`) seats in that
+order with **no window calls** — only reorders pay the per-stop `setStopWindow` cost.
 
 **Draft → Save (batch) pattern** (`usePlanning.commit`): stage all moves/reorders
-locally (zero calls), then commit — Phase 1 unplans departures, Phase 2 rebuilds each
-touched load with the anchor method. Cost is bounded by *loads touched*, not moves.
+locally (zero calls), then commit — Phase 1 unplans departures, Phase 2 window-encodes each
+touched load's order and rebuilds it (anchor + remove-rest + one bulk insert). Cost is bounded
+by *loads touched + their stops*, not by how many moves were dragged.
 
 **Dead ends / gated (don't waste time):**
 - `load/edit` has a documented `routeSeq: [{stopNbr, sequence, …}]` field — it is a
