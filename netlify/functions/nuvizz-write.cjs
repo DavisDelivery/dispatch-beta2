@@ -200,6 +200,23 @@ exports.handler = async (event) => {
         const r = await nuvizz('POST', `load/edit/${cc}`, auth, payload)
         return json(200, r)
       }
+      case 'stopPartialUpdate': {
+        // Write a stop's fields directly (e.g. stopSeq) without a full re-import.
+        // Each stop needs at least stopId. UNTESTED for sequencing — exploratory.
+        const { stops } = req
+        if (!Array.isArray(stops) || !stops.length) return json(400, { error: 'stopPartialUpdate needs stops[]' })
+        const r = await nuvizz('POST', `stop/partialUpdate/${cc}`, auth, { stops })
+        return json(200, r)
+      }
+      case 'loadImport': {
+        // Full ordered-load import (load/update/{serviceName}). loads[] carries
+        // loadHeader.stopSeqOrder + stops[].stopSeq. UNTESTED — exploratory.
+        const { loads, serviceName } = req
+        if (!Array.isArray(loads) || !loads.length) return json(400, { error: 'loadImport needs loads[]' })
+        const svc = encodeURIComponent(serviceName || 'default')
+        const r = await nuvizz('POST', `load/update/${svc}/${cc}`, auth, { companyCode, loads })
+        return json(200, r)
+      }
       case 'staticList': {
         // List the recurring (static) route templates. Each carries a routeId we
         // can generate a fresh dated load instance from.
