@@ -310,6 +310,22 @@ Live evidence (UAT): `SQTLOADC` — created in 1 call in order MAR→DUL→DEC�
 1 call to ROS→DEC→DUL→MAR, then re-imported without DUL (unplanned, stop preserved) as
 ROS→MAR→DEC. A control load + two lever-conflict loads were cancelled after verification.
 
+**Scale + injection test (Jul 1 2026, 9→10 real stops, load `SQTLOADH`, kept in UAT):**
+- 9 orders (real Davis consignees, Dalton→Forest Park whipsaw order) created + imported in
+  ONE call: exact match at 9 stops. Full 10-stop reversal: exact. "Optimizer" reorder to a
+  sensible driving loop: exact, first try. Tail-only swap (8-stop matching prefix): exact.
+- **Mid-route injection of a NEW stop lands at the END on the first import** — the add is
+  applied, its position is not. Follow-up reorder imports sent within the next ~minutes
+  also no-opped twice (same payload later applied unchanged), which looks like a **stale-state
+  window in the async worker right after a membership change**. Once settled, every reorder
+  applied on the first try.
+- **Robust recipe (self-healing, still O(1) calls per load):** after EVERY import, poll
+  `load/info` and compare `to.seq` to the requested order. Converged → done. Not converged
+  after ~60–90 s → re-send the same import; if still stuck, send the array REVERSED, then
+  the desired order (verified to unstick it). Never trust the 200 alone.
+- Injection therefore = 1 import (add, appends) + 1–2 reorder imports (seat it) — constant
+  calls, vs the anchor+remove+re-insert path's ~2N+1.
+
 > ⚠️ **Delivery windows do NOT set the order.** An earlier hypothesis — that NuVizz seats a
 > bulk insert by `to.schedule.timeFrom` — was a **measurement artifact** (the "confirming" tests
 > used identical addresses, which gave the optimizer no distance signal, or set array order =
