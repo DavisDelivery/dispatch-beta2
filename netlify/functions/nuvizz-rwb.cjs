@@ -164,23 +164,39 @@ exports.handler = async (event) => {
       // authtoken returns a Bearer token in the body: { authToken: <RS256 JWT> }
       const authToken = at.data && (at.data.authToken || at.data.token || at.data.jwtToken)
       steps.push({ step: 'authtoken', status: at.status, authTokenFound: !!authToken, setCookies: at.setCookies, portalCookieNames: jar.names(hostOf(portalBase)), bodySnip: (at.text || '').slice(0, 120) })
-      const bearer = authToken ? { authorization: `Bearer ${authToken}` } : {}
-
-      // 5) establish the portal session — postlogininfo with the Bearer token
-      //    (what the browser does right after authtoken; it seats cookies/CSRF)
-      const pli = await go(jar, 'POST', `${portalBase}/deliverit/initapi/postlogininfo`, {
-        headers: { 'content-type': 'application/json', origin: portalBase, referer: `${portalBase}/deliverit/dirouteworkbench/index.html`, ...bearer },
-        body: '{}',
-      })
-      steps.push({ step: 'postlogininfo', status: pli.status, setCookies: pli.setCookies, portalCookieNames: jar.names(hostOf(portalBase)), loggedInAs: pli.data && pli.data.logged_in_userName })
-
-      // 6) verify with an authed RWB GET — Bearer + any cookies/CSRF now present
-      const pcsrf = jar.get(hostOf(portalBase), 'XSRF-TOKEN') || jar.get(hostOf(portalBase), 'CSRF-TOKEN')
-      const chk = await go(jar, 'GET', `${portalBase}/deliverit/dirouteworkbench/routePlan/getFilter?listName=RWStop`, {
-        headers: { referer: `${portalBase}/deliverit/dirouteworkbench/index.html`, ...bearer, ...(pcsrf ? { 'X-CSRF-TOKEN': pcsrf } : {}) },
-      })
-      portalAuthed = chk.status === 200
-      steps.push({ step: 'authed RWB GET (getFilter)', status: chk.status, authed: portalAuthed, usedBearer: !!authToken, portalCsrfFound: !!pcsrf, bodySnip: (chk.text || '').slice(0, 150) })
+      // 5) DISCOVERY: how does authToken authenticate the portal? Try every common
+      //    transport against a cheap authed POST and report which yields a real 200.
+      const testUrl = `${portalBase}/deliverit/initapi/postlogininfo`
+      const ref = `${portalBase}/deliverit/dirouteworkbench/index.html`
+      const matrix = [
+        ['Bearer', { authorization: `Bearer ${authToken}` }, null],
+        ['auth-raw', { authorization: authToken }, null],
+        ['X-Auth-Token', { 'x-auth-token': authToken }, null],
+        ['authToken-hdr', { authtoken: authToken }, null],
+        ['x-access-token', { 'x-access-token': authToken }, null],
+        ['cookie:authToken', { cookie: `authToken=${authToken}` }, null],
+        ['cookie:access_token', { cookie: `access_token=${authToken}` }, null],
+        ['cookie:token', { cookie: `token=${authToken}` }, null],
+        ['cookie:JWT_TOKEN', { cookie: `JWT_TOKEN=${authToken}` }, null],
+        ['query', {}, `${testUrl}?authToken=${encodeURIComponent(authToken)}`],
+      ]
+      const results = []
+      for (const [name, hdrs, altUrl] of matrix) {
+        try {
+          const res = await fetch(altUrl || testUrl, {
+            method: 'POST', redirect: 'manual',
+            headers: { 'content-type': 'application/json', origin: portalBase, referer: ref, ...hdrs },
+            body: '{}',
+          })
+          const t = await res.text().catch(() => '')
+          const authed = res.status === 200 && /logged_in_userName|companyCode/i.test(t)
+          results.push({ name, status: res.status, authed, snip: t.slice(0, 40) })
+          if (authed) portalAuthed = true
+        } catch (e) {
+          results.push({ name, error: e.message })
+        }
+      }
+      steps.push({ step: 'authToken transport matrix', anyAuthed: portalAuthed, results })
     } else {
       steps.push({ step: 'JWT', found: false, note: 'could not locate JWT from userLogin — inspect bodySnip above' })
     }
