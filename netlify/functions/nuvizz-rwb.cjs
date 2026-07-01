@@ -80,7 +80,9 @@ async function go(jar, method, url, { headers = {}, body } = {}) {
   const text = await res.text().catch(() => '')
   let data
   try { data = JSON.parse(text) } catch { data = null }
-  return { status: res.status, text, data, setCookies: setNames, location: res.headers.get('location') }
+  const hdrs = {}
+  for (const [k, v] of res.headers.entries()) hdrs[k] = v
+  return { status: res.status, text, data, setCookies: setNames, location: res.headers.get('location'), headers: hdrs }
 }
 
 exports.handler = async (event) => {
@@ -104,17 +106,19 @@ exports.handler = async (event) => {
   const steps = []
   const ORIGIN = LOGIN_BASE
   try {
-    // 1) CSRF bootstrap — try a few GETs that may set the XSRF-TOKEN cookie.
+    // 1) CSRF bootstrap — GET the login page; Spring embeds the token as a
+    //    <meta name="_csrf" content="..."> tag (session-bound via the SESSION cookie),
+    //    with <meta name="_csrf_header"> naming the header to echo it in.
     let csrf = null
-    for (const path of ['/loginreg/', '/loginreg/csrf', '/loginreg/reg/csrf', '/']) {
-      const r = await go(jar, 'GET', `${LOGIN_BASE}${path}`)
-      const tok = jar.get(hostOf(LOGIN_BASE), 'XSRF-TOKEN') || jar.get(hostOf(LOGIN_BASE), 'CSRF-TOKEN')
-      steps.push({ step: `bootstrap GET ${path}`, status: r.status, setCookies: r.setCookies })
-      if (tok) { csrf = tok; break }
-    }
-    steps.push({ step: 'csrf-after-bootstrap', loginCookieNames: jar.names(hostOf(LOGIN_BASE)), csrfFound: !!csrf })
+    let csrfHeaderName = 'X-CSRF-TOKEN'
+    const boot = await go(jar, 'GET', `${LOGIN_BASE}/loginreg/`)
+    const mTok = (boot.text || '').match(/name=["']_csrf["']\s+content=["']([^"']+)["']/i)
+    const mHdr = (boot.text || '').match(/name=["']_csrf_header["']\s+content=["']([^"']+)["']/i)
+    if (mTok) csrf = mTok[1]
+    if (mHdr) csrfHeaderName = mHdr[1]
+    steps.push({ step: 'bootstrap GET /loginreg/', status: boot.status, setCookies: boot.setCookies, csrfFound: !!csrf, csrfHeaderName })
 
-    const csrfHdr = csrf ? { 'X-CSRF-TOKEN': csrf } : {}
+    const csrfHdr = csrf ? { [csrfHeaderName]: csrf } : {}
 
     // 2) checkCompanyLogin
     const cc = await go(jar, 'POST', `${LOGIN_BASE}/loginreg/reg/checkCompanyLogin`, {
@@ -136,12 +140,15 @@ exports.handler = async (event) => {
     // where's the JWT? body (string/json), or a response header, or a cookie
     const jwtFromBody = typeof ul.text === 'string' && ul.text.length > 20 && ul.text.split('.').length === 3 ? ul.text : null
     const jwtField = ul.data && (ul.data.jwt || ul.data.token || ul.data.jwtToken || ul.data.accessToken)
+    // JWT might come back in a response header too (authorization / x-*-token)
+    const jwtHeader = ul.headers && (ul.headers.authorization || ul.headers['x-auth-token'] || ul.headers['x-jwt-token'] || ul.headers.jwt)
     steps.push({
       step: 'userLogin', status: ul.status, setCookies: ul.setCookies,
       bodyType: ul.data ? 'json' : 'text', bodyKeys: ul.data ? Object.keys(ul.data) : undefined,
       bodySnip: (ul.text || '').slice(0, 200), jwtLooksLikeBody: !!jwtFromBody, jwtField: jwtField ? '<found>' : undefined,
+      respHeaderNames: ul.headers ? Object.keys(ul.headers) : undefined, jwtHeader: jwtHeader ? '<found>' : undefined,
     })
-    const jwt = jwtFromBody || jwtField || jar.get(hostOf(LOGIN_BASE), 'jwt')
+    const jwt = jwtFromBody || jwtField || jwtHeader || jar.get(hostOf(LOGIN_BASE), 'jwt')
 
     // 4) authtoken on the portal host -> portal session
     let portalAuthed = false
