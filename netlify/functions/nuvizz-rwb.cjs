@@ -141,6 +141,25 @@ exports.handler = async (event) => {
       return json(200, { ok: r.status >= 200 && r.status < 300, status: r.status, body: r.data ?? r.text.slice(0, 4000) })
     }
 
+    if (op === 'batch') {
+      // login once, run many read probes: requests:[{method,path,query?,form?,json?}]
+      const out = []
+      for (const rq of req.requests || []) {
+        const method = (rq.method || 'GET').toUpperCase()
+        let url = `${portalBase}/deliverit/${String(rq.path || '').replace(/^\//, '')}`
+        if (rq.query) url += (url.includes('?') ? '&' : '?') + new URLSearchParams(rq.query).toString()
+        let body, extra = {}
+        if (rq.form) {
+          const f = new FormData()
+          for (const [k, v] of Object.entries(rq.form)) f.set(k, typeof v === 'object' ? JSON.stringify(v) : String(v))
+          body = f
+        } else if (rq.json) { body = JSON.stringify(rq.json); extra = { 'content-type': 'application/json' } }
+        const r = await go(sess.jar, method, url, { headers: { ...rwbHeaders, origin: portalBase, ...extra }, body })
+        out.push({ path: rq.path, status: r.status, body: typeof (r.data ?? r.text) === 'string' ? (r.text || '').slice(0, 700) : r.data })
+      }
+      return json(200, { ok: true, results: out })
+    }
+
     if (op === 'reorder') {
       const { routePlanId, stopIds } = req
       if (!routePlanId || !Array.isArray(stopIds) || !stopIds.length) return json(400, { error: 'reorder needs routePlanId and stopIds[]' })
