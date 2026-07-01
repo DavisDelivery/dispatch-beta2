@@ -142,7 +142,8 @@ exports.handler = async (event) => {
     })
     // where's the JWT? body (string/json), or a response header, or a cookie
     const jwtFromBody = typeof ul.text === 'string' && ul.text.length > 20 && ul.text.split('.').length === 3 ? ul.text : null
-    const jwtField = ul.data && (ul.data.jwt || ul.data.token || ul.data.jwtToken || ul.data.accessToken)
+    // userLogin returns { status, message, data: { companyCode, username, jwtToken } }
+    const jwtField = ul.data && ((ul.data.data && ul.data.data.jwtToken) || ul.data.jwtToken || ul.data.jwt || ul.data.token || ul.data.accessToken)
     // JWT might come back in a response header too (authorization / x-*-token)
     const jwtHeader = ul.headers && (ul.headers.authorization || ul.headers['x-auth-token'] || ul.headers['x-jwt-token'] || ul.headers.jwt)
     steps.push({
