@@ -184,3 +184,5 @@ exports.handler = async (event) => {
     return json(502, { error: (err && err.message) || 'error' })
   }
 }
+
+// redeploy: pick up NUVIZZ_PORTAL_* env
