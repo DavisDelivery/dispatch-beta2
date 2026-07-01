@@ -255,7 +255,7 @@ known load (~8 calls) to correct planned/unplanned drift. Replace with the §3.9
 
 ---
 
-## 10. Stop SEQUENCING (manual order) — one-at-a-time insert is the only lever
+## 10. Stop SEQUENCING (manual order) — BATCH via load import (§10.1); one-at-a-time as fallback
 
 The order a driver visits stops is `stop.to.seq` on a load (1 = origin pickup,
 2..N = deliveries). `normalizeLoad` surfaces it as `seq`. Array order in the payload is
@@ -270,8 +270,45 @@ mode: `Far` (farthest first) · `Near` (nearest first) · `None` (shortest-path)
 - A **one-at-a-time insert** (one call per stop) **APPENDS** each stop to the end. Inserting
   the same 4 stops one-by-one in `GVL, ATL, KEN, AUS` order yields exactly that `to.seq` order.
 
-So **manual sequencing = insert one stop at a time, in the desired order.** That is the only
-reliable control of `to.seq` on the clean (Basic-auth) API.
+So on the *insertStops* path, **manual sequencing = insert one stop at a time, in the desired
+order.** That was long the only known control — until the **load import (§10.1)** was cracked:
+one call now creates or rebuilds a whole load in an exact chosen order. Prefer §10.1; keep
+one-at-a-time as the fallback for incremental single-stop appends.
+
+### 10.1 BATCH ordering — `load/update/{serviceName}/{cc}` (verified live, Jul 1 2026)
+
+The async **load import** (`loadImport` op; serviceName `default` works) is the 1-call batch
+lever: `{ companyCode, loads: [{ loadHeader, stops: [...] }] }`. Verified against UAT DAVISV5:
+
+- **The `stops[]` ARRAY ORDER is the visit order.** Two controlled conflict tests (array order
+  vs deliberately contradicting `stopSeq` numbers, with and without `stopSeqOrder: 1` in the
+  header) both seated the stops in ARRAY order — the `stopSeq` values and the `stopSeqOrder`
+  flag are ignored. The optimizer does NOT rearrange an imported load (anti-geographic zigzag
+  orders came back exactly as sent).
+- **Create-with-order:** a new `loadNbr` + full inline stop payloads lands as a load with
+  `to.seq` exactly matching the array. 1 call for N stops.
+- **Re-order in ONE call:** re-importing the SAME `loadNbr` with the stops permuted rebuilds
+  the load in the new order. The import is **declarative**: stops omitted from a re-import are
+  UNPLANNED from the load (the stop itself survives, unassigned) — one import = "this is the
+  load's complete stop list, in this order". A board Save = one import per touched load.
+- **Existing (already-created) stops** plan by reference: `stopNbr` + `stopType` + a `to`
+  block (address + schedule) suffices ("Either From or To information should be present" —
+  bare `stopNbr` refs are rejected). The stop's `from` side and other fields survive the
+  upsert (checked: origin address/schedule intact after a to-only import).
+- **Header contract (the silent-failure trap):** the header MUST carry
+  `earliestStartDttm`/`latestStartDttm` (NOT `scheduleStartDttm` — that's `load/edit` naming)
+  **and the flat origin fields** (`origin`, `originName`, `originAddr1/2`, `originCity`,
+  `originState`, `originZip`, `originCountry`, `loadTimeZone`). Omitting the origin fields
+  passes sync validation ("Async import is SUCCESS…AppMessageLog Id") but the background
+  worker silently creates nothing — the reason lives only in NuVizz's AppMessageLog, which
+  the open API has NO endpoint for. Poll `load/info/{loadNbr}` (~5–15 s) to confirm it landed.
+- Spec limit ≤500 loads/request. Full schema + `LoadAPIExample`: the OpenAPI spec is embedded
+  in `developer.nuvizzapps.com/v7/webservices.html` (ReDoc `__redoc_state` JSON — there is no
+  standalone spec URL).
+
+Live evidence (UAT): `SQTLOADC` — created in 1 call in order MAR→DUL→DEC→ROS, reversed in
+1 call to ROS→DEC→DUL→MAR, then re-imported without DUL (unplanned, stop preserved) as
+ROS→MAR→DEC. A control load + two lever-conflict loads were cancelled after verification.
 
 > ⚠️ **Delivery windows do NOT set the order.** An earlier hypothesis — that NuVizz seats a
 > bulk insert by `to.schedule.timeFrom` — was a **measurement artifact** (the "confirming" tests
@@ -318,8 +355,9 @@ by *loads touched + their stops*, not by how many moves were dragged.
   lands last, not between (immediately and after an 8s recheck).
 - Window constraint (`STRICT` vs `PREFERRED`) made **no difference** to either.
 
-Conclusion: **no load setting or window trick makes a bulk/single insert honor an order** on the
-clean Basic-auth API. One-at-a-time insertion (above) is the only reliable lever. The portal's
+Conclusion: **no load setting or window trick makes a bulk/single `insertStops` honor an order**
+on the clean Basic-auth API. The levers are the **load import (§10.1, batch)** and one-at-a-time
+insertion (incremental). The portal's
 drag-to-reorder / ETA ordering runs through its internal **session-gated** resequence endpoints
 (see below), which Basic auth can't reach — that's why ordering "works in the portal" but not here.
 
@@ -330,12 +368,15 @@ drag-to-reorder / ETA ordering runs through its internal **session-gated** reseq
 **Dead ends / gated (don't waste time):**
 - `load/edit` has a documented `routeSeq: [{stopNbr, sequence, …}]` field — it is a
   **no-op** (200, no effect). Tested every shape. Do not use it.
-- `routePlan/update/{serviceName}/{cc}` IS the clean 1-call "send full ordered route"
-  endpoint (`{companyCode, route:{loadHeader, planStops:[{stopNbr, from:{seq,schedule},
-  to:{seq,schedule}}]}}`, example `RouteExistingStops`). Our payload is correct (the
-  wrapper validates), but it **500s "deliverItLoad is null"** — the `default` route-plan
-  service isn't wired for the tenant. **Needs NuVizz to enable the route-plan integration
-  service** (or a real `serviceName`); then it's a clean one-call save.
+- `routePlan/update/{serviceName}/{cc}` — still dead (retested Jul 1 2026 with the
+  example-faithful payload incl. flat origin fields, serviceNames `default` and
+  `RouteExistingStops`): **500 "deliverItLoad is null"** every time. The route-plan
+  integration service isn't provisioned for the tenant. Use §10.1 instead — it does the
+  same job and works today.
+- `stop/partialUpdate/{cc}` — the spec shows per-stop `stopSeq`/`altStopSeq` (≤500 stops
+  per call), but on UAT DAVISV5 it **500s "Something Went Wrong"** for EVERY payload,
+  even a single non-seq field (`reference1`) on one stop — the endpoint itself is broken/
+  unprovisioned here, not our shape. Re-check on prod before ruling it out there.
 - The portal's Route Workbench (`dirouteworkbench/*`, `opt-job/routeopt/resequenceRoute`,
   `resequenceBuildManualRoute`, `saveComparedRouteData`) does 1-call sequencing/optimize,
   but is **session cookie + CSRF** only (rejects Basic auth, 401). Would need a server-side
