@@ -161,15 +161,26 @@ exports.handler = async (event) => {
         headers: { 'content-type': 'application/json', origin: portalBase, referer: `${portalBase}/deliverit/dirouteworkbench/index.html` },
         body: JSON.stringify({ username: 'jwt', password: jwt }),
       })
-      steps.push({ step: 'authtoken', status: at.status, setCookies: at.setCookies, portalCookieNames: jar.names(hostOf(portalBase)), bodySnip: (at.text || '').slice(0, 150) })
+      // authtoken returns a Bearer token in the body: { authToken: <RS256 JWT> }
+      const authToken = at.data && (at.data.authToken || at.data.token || at.data.jwtToken)
+      steps.push({ step: 'authtoken', status: at.status, authTokenFound: !!authToken, setCookies: at.setCookies, portalCookieNames: jar.names(hostOf(portalBase)), bodySnip: (at.text || '').slice(0, 120) })
+      const bearer = authToken ? { authorization: `Bearer ${authToken}` } : {}
 
-      // 5) verify with an authed RWB GET (the portal CSRF may be a cookie now)
+      // 5) establish the portal session — postlogininfo with the Bearer token
+      //    (what the browser does right after authtoken; it seats cookies/CSRF)
+      const pli = await go(jar, 'POST', `${portalBase}/deliverit/initapi/postlogininfo`, {
+        headers: { 'content-type': 'application/json', origin: portalBase, referer: `${portalBase}/deliverit/dirouteworkbench/index.html`, ...bearer },
+        body: '{}',
+      })
+      steps.push({ step: 'postlogininfo', status: pli.status, setCookies: pli.setCookies, portalCookieNames: jar.names(hostOf(portalBase)), loggedInAs: pli.data && pli.data.logged_in_userName })
+
+      // 6) verify with an authed RWB GET — Bearer + any cookies/CSRF now present
       const pcsrf = jar.get(hostOf(portalBase), 'XSRF-TOKEN') || jar.get(hostOf(portalBase), 'CSRF-TOKEN')
       const chk = await go(jar, 'GET', `${portalBase}/deliverit/dirouteworkbench/routePlan/getFilter?listName=RWStop`, {
-        headers: { referer: `${portalBase}/deliverit/dirouteworkbench/index.html`, ...(pcsrf ? { 'X-CSRF-TOKEN': pcsrf } : {}) },
+        headers: { referer: `${portalBase}/deliverit/dirouteworkbench/index.html`, ...bearer, ...(pcsrf ? { 'X-CSRF-TOKEN': pcsrf } : {}) },
       })
       portalAuthed = chk.status === 200
-      steps.push({ step: 'authed RWB GET (getFilter)', status: chk.status, authed: portalAuthed, portalCsrfFound: !!pcsrf, bodySnip: (chk.text || '').slice(0, 150) })
+      steps.push({ step: 'authed RWB GET (getFilter)', status: chk.status, authed: portalAuthed, usedBearer: !!authToken, portalCsrfFound: !!pcsrf, bodySnip: (chk.text || '').slice(0, 150) })
     } else {
       steps.push({ step: 'JWT', found: false, note: 'could not locate JWT from userLogin — inspect bodySnip above' })
     }
