@@ -1,187 +1,162 @@
 'use strict'
 
-// Route Workbench (RWB) portal-session client — the GATED path the NuVizz portal
-// uses to reorder a route in ONE call (dirouteworkbench/stop/addStopsToRouteAfterValidation).
-// Unlike the openapi/v7 surface (Basic auth), the RWB endpoints ride a logged-in
-// PORTAL SESSION: per-host cookies + a per-host CSRF token. This function logs in
-// like the browser does, holds the cookie jar, and (eventually) drives the reorder.
+// Route Workbench (RWB) portal-session client — the GATED 1-call reorder path the
+// NuVizz portal uses (dirouteworkbench/stop/addStopsToRouteAfterValidation).
 //
-// Login flow (reverse-engineered from a portal HAR):
-//   1. bootstrap CSRF on login.nuvizz.com (XSRF-TOKEN cookie == X-CSRF-TOKEN header)
-//   2. POST login.nuvizz.com/loginreg/reg/checkCompanyLogin   {companyCode, appCode:"portal"}
-//   3. POST login.nuvizz.com/loginreg/auth/userLogin          multipart {companyCode, username, password, appCode}
-//        -> yields a JWT
-//   4. POST {portal}/deliverit/instance/ndv2/openapi/loginreg/authtoken/{COMPANY}  {username:"jwt", password:<JWT>}
-//        -> establishes the portal session (cookies + CSRF)
-//   5. RWB calls on {portal} with the portal cookies + CSRF
+// AUTH (fully reverse-engineered + proven server-side):
+//   1. GET  {loginBase}/loginreg/                      -> SESSION + <meta _csrf> token
+//   2. POST {loginBase}/loginreg/reg/checkCompanyLogin {companyCode, appCode:"portal"}  + X-CSRF-TOKEN
+//   3. POST {loginBase}/loginreg/auth/userLogin        multipart {companyCode,username,password,appCode} -> JWT (data.data.jwtToken)
+//   4. POST {portalBase}/deliverit/instance/ndv2/openapi/loginreg/authtoken/{COMPANY} {username:"jwt",password:JWT} -> authToken
+//   5. RWB calls: Authorization: Basic base64("JWT:"+authToken)  + Cookie: Instance=ndv2
+//   loginBase: PROD=login.nuvizz.com, UAT/QA=loginqa.nuvizz.com
 //
-// THIS BUILD = the `probe` action only: run the login and REPORT what it captures
-// (status per step, Set-Cookie names, where the JWT/CSRF land, and whether an authed
-// RWB GET succeeds). No route mutations yet — we wire those once the session is proven.
+// Ops:
+//   probe   -> run the login and verify with a read-only getFilter (reports steps)
+//   rwb     -> generic authed request to the portal: { method, path, query?, form?, json? }
+//              (path is under {portalBase}/deliverit). Returns { status, body }.
+//   reorder -> POST dirouteworkbench/stop/addStopsToRouteAfterValidation
+//              { routePlanId, stopIds:[...ordered], isPlanningMode?, csrf? }
 //
-// Gated by NUVIZZ_WRITE_ENABLED. Credentials: portal login uses NUVIZZ_PORTAL_USER /
-// NUVIZZ_PORTAL_PASS if set, else falls back to NUVIZZ_DAVIS_USER / NUVIZZ_DAVIS_PASS.
+// Gated by NUVIZZ_WRITE_ENABLED. Creds: NUVIZZ_PORTAL_USER/PASS else NUVIZZ_DAVIS_USER/PASS.
+// (No route mutation happens except via the explicit `reorder`/`rwb` ops.)
 
-// Login gateway differs by environment: PROD = login.nuvizz.com, UAT/QA = loginqa.nuvizz.com
-// (uat.nuvizz.com/deliverit redirects to loginqa.nuvizz.com/loginreg). Overridable per request.
 const DEFAULT_LOGIN_BASE = 'https://login.nuvizz.com'
 
 function json(statusCode, body) {
   return { statusCode, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' }, body: JSON.stringify(body) }
 }
 
-// Minimal per-host cookie jar.
 function makeJar() {
-  const byHost = new Map() // host -> Map(name->value)
+  const byHost = new Map()
   return {
     store(host, res) {
       let list = []
       try { list = res.headers.getSetCookie() || [] } catch { /* older node */ }
-      if (!list.length) {
-        const raw = res.headers.get('set-cookie')
-        if (raw) list = [raw]
-      }
+      if (!list.length) { const raw = res.headers.get('set-cookie'); if (raw) list = [raw] }
       if (!byHost.has(host)) byHost.set(host, new Map())
       const m = byHost.get(host)
-      for (const c of list) {
-        const first = c.split(';')[0]
-        const i = first.indexOf('=')
-        if (i > 0) m.set(first.slice(0, i).trim(), first.slice(i + 1).trim())
-      }
+      for (const c of list) { const f = c.split(';')[0]; const i = f.indexOf('='); if (i > 0) m.set(f.slice(0, i).trim(), f.slice(i + 1).trim()) }
       return list.map((c) => c.split(';')[0].split('=')[0])
     },
-    header(host) {
-      const m = byHost.get(host)
-      if (!m || !m.size) return ''
-      return [...m.entries()].map(([k, v]) => `${k}=${v}`).join('; ')
-    },
-    get(host, name) {
-      const m = byHost.get(host)
-      return m ? m.get(name) : undefined
-    },
-    names(host) {
-      const m = byHost.get(host)
-      return m ? [...m.keys()] : []
-    },
+    header(host) { const m = byHost.get(host); return m && m.size ? [...m.entries()].map(([k, v]) => `${k}=${v}`).join('; ') : '' },
+    get(host, name) { const m = byHost.get(host); return m ? m.get(name) : undefined },
   }
 }
-
 const hostOf = (u) => new URL(u).host
 
-// fetch that feeds/eats the jar; never throws on non-2xx.
 async function go(jar, method, url, { headers = {}, body } = {}) {
   const host = hostOf(url)
   const cookie = jar.header(host)
-  const res = await fetch(url, {
-    method,
-    redirect: 'manual',
-    headers: { ...(cookie ? { cookie } : {}), ...headers },
-    body,
-  })
-  const setNames = jar.store(host, res)
+  const res = await fetch(url, { method, redirect: 'manual', headers: { ...(cookie ? { cookie } : {}), ...headers }, body })
+  jar.store(host, res)
   const text = await res.text().catch(() => '')
   let data
   try { data = JSON.parse(text) } catch { data = null }
-  const hdrs = {}
-  for (const [k, v] of res.headers.entries()) hdrs[k] = v
-  return { status: res.status, text, data, setCookies: setNames, location: res.headers.get('location'), headers: hdrs }
+  return { status: res.status, text, data }
+}
+
+// Full login -> { authToken, jar, steps, error }
+async function portalLogin(cfg) {
+  const { LOGIN_BASE, portalBase, companyCode, COMPANY, username, password } = cfg
+  const jar = makeJar()
+  const steps = []
+  const ref = `${portalBase}/deliverit/dirouteworkbench/index.html`
+
+  const boot = await go(jar, 'GET', `${LOGIN_BASE}/loginreg/`)
+  const mTok = (boot.text || '').match(/name=["']_csrf["']\s+content=["']([^"']+)["']/i)
+  const mHdr = (boot.text || '').match(/name=["']_csrf_header["']\s+content=["']([^"']+)["']/i)
+  const csrf = mTok ? mTok[1] : null
+  const csrfHeaderName = mHdr ? mHdr[1] : 'X-CSRF-TOKEN'
+  steps.push({ step: 'bootstrap', status: boot.status, csrfFound: !!csrf })
+  if (!csrf) return { error: 'no CSRF token from login page', steps }
+  const csrfHdr = { [csrfHeaderName]: csrf }
+
+  const cc = await go(jar, 'POST', `${LOGIN_BASE}/loginreg/reg/checkCompanyLogin`, {
+    headers: { 'content-type': 'application/json', origin: LOGIN_BASE, referer: `${LOGIN_BASE}/loginreg/`, ...csrfHdr },
+    body: JSON.stringify({ companyCode, appCode: 'portal' }),
+  })
+  steps.push({ step: 'checkCompanyLogin', status: cc.status })
+
+  const fd = new FormData()
+  fd.set('companyCode', companyCode); fd.set('username', username); fd.set('password', password); fd.set('appCode', 'portal')
+  const ul = await go(jar, 'POST', `${LOGIN_BASE}/loginreg/auth/userLogin`, {
+    headers: { origin: LOGIN_BASE, referer: `${LOGIN_BASE}/loginreg/`, ...csrfHdr }, body: fd,
+  })
+  const jwt = ul.data && ((ul.data.data && ul.data.data.jwtToken) || ul.data.jwtToken)
+  steps.push({ step: 'userLogin', status: ul.status, jwt: !!jwt, msg: ul.data && ul.data.message })
+  if (!jwt) return { error: 'login failed (no JWT)', steps }
+
+  const at = await go(jar, 'POST', `${portalBase}/deliverit/instance/ndv2/openapi/loginreg/authtoken/${COMPANY}`, {
+    headers: { 'content-type': 'application/json', origin: portalBase, referer: ref },
+    body: JSON.stringify({ username: 'jwt', password: jwt }),
+  })
+  const authToken = at.data && (at.data.authToken || at.data.token || at.data.jwtToken)
+  steps.push({ step: 'authtoken', status: at.status, authToken: !!authToken })
+  if (!authToken) return { error: 'no authToken', steps }
+
+  return { authToken, jar, steps, ref }
 }
 
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') return json(405, { error: 'POST only' })
   if (process.env.NUVIZZ_WRITE_ENABLED !== 'true') return json(403, { error: 'disabled' })
-
   let req = {}
   try { req = JSON.parse(event.body || '{}') } catch { return json(400, { error: 'bad json' }) }
   const op = req.op || 'probe'
 
-  const companyCode = req.companyCode || 'davis'          // login companyCode (lowercase in HAR)
-  const COMPANY = (req.company || companyCode).toUpperCase() // path segment for authtoken
+  const companyCode = req.companyCode || 'davis'
+  const COMPANY = (req.company || companyCode).toUpperCase()
   const portalBase = req.portalBase || 'https://portal.nuvizz.com'
   const LOGIN_BASE = req.loginBase || DEFAULT_LOGIN_BASE
   const username = req.username || process.env.NUVIZZ_PORTAL_USER || process.env.NUVIZZ_DAVIS_USER
   const password = req.password || process.env.NUVIZZ_PORTAL_PASS || process.env.NUVIZZ_DAVIS_PASS
-  if (!username || !password) return json(500, { error: 'no portal creds (NUVIZZ_PORTAL_USER/PASS or NUVIZZ_DAVIS_USER/PASS)' })
+  if (!username || !password) return json(500, { error: 'no portal creds' })
 
-  if (op !== 'probe') return json(400, { error: `unknown op "${op}" (only "probe" in this build)` })
+  const cfg = { LOGIN_BASE, portalBase, companyCode, COMPANY, username, password }
 
-  const jar = makeJar()
-  const steps = []
-  const ORIGIN = LOGIN_BASE
   try {
-    // 1) CSRF bootstrap — GET the login page; Spring embeds the token as a
-    //    <meta name="_csrf" content="..."> tag (session-bound via the SESSION cookie),
-    //    with <meta name="_csrf_header"> naming the header to echo it in.
-    let csrf = null
-    let csrfHeaderName = 'X-CSRF-TOKEN'
-    const boot = await go(jar, 'GET', `${LOGIN_BASE}/loginreg/`)
-    const mTok = (boot.text || '').match(/name=["']_csrf["']\s+content=["']([^"']+)["']/i)
-    const mHdr = (boot.text || '').match(/name=["']_csrf_header["']\s+content=["']([^"']+)["']/i)
-    if (mTok) csrf = mTok[1]
-    if (mHdr) csrfHeaderName = mHdr[1]
-    steps.push({ step: 'bootstrap GET /loginreg/', status: boot.status, setCookies: boot.setCookies, csrfFound: !!csrf, csrfHeaderName })
+    const sess = await portalLogin(cfg)
+    if (sess.error) return json(200, { ok: false, ...sess })
+    const basic = 'Basic ' + Buffer.from(`JWT:${sess.authToken}`).toString('base64')
+    const rwbHeaders = { authorization: basic, cookie: 'Instance=ndv2', referer: sess.ref }
 
-    const csrfHdr = csrf ? { [csrfHeaderName]: csrf } : {}
-
-    // 2) checkCompanyLogin
-    const cc = await go(jar, 'POST', `${LOGIN_BASE}/loginreg/reg/checkCompanyLogin`, {
-      headers: { 'content-type': 'application/json', origin: ORIGIN, referer: `${LOGIN_BASE}/loginreg/`, ...csrfHdr },
-      body: JSON.stringify({ companyCode, appCode: 'portal' }),
-    })
-    steps.push({ step: 'checkCompanyLogin', status: cc.status, setCookies: cc.setCookies, bodySnip: (cc.text || '').slice(0, 120) })
-
-    // 3) userLogin (multipart) -> JWT
-    const fd = new FormData()
-    fd.set('companyCode', companyCode)
-    fd.set('username', username)
-    fd.set('password', password)
-    fd.set('appCode', 'portal')
-    const ul = await go(jar, 'POST', `${LOGIN_BASE}/loginreg/auth/userLogin`, {
-      headers: { origin: ORIGIN, referer: `${LOGIN_BASE}/loginreg/`, ...csrfHdr },
-      body: fd,
-    })
-    // where's the JWT? body (string/json), or a response header, or a cookie
-    const jwtFromBody = typeof ul.text === 'string' && ul.text.length > 20 && ul.text.split('.').length === 3 ? ul.text : null
-    // userLogin returns { status, message, data: { companyCode, username, jwtToken } }
-    const jwtField = ul.data && ((ul.data.data && ul.data.data.jwtToken) || ul.data.jwtToken || ul.data.jwt || ul.data.token || ul.data.accessToken)
-    // JWT might come back in a response header too (authorization / x-*-token)
-    const jwtHeader = ul.headers && (ul.headers.authorization || ul.headers['x-auth-token'] || ul.headers['x-jwt-token'] || ul.headers.jwt)
-    steps.push({
-      step: 'userLogin', status: ul.status, setCookies: ul.setCookies,
-      bodyType: ul.data ? 'json' : 'text', bodyKeys: ul.data ? Object.keys(ul.data) : undefined,
-      bodySnip: (ul.text || '').slice(0, 200), jwtLooksLikeBody: !!jwtFromBody, jwtField: jwtField ? '<found>' : undefined,
-      respHeaderNames: ul.headers ? Object.keys(ul.headers) : undefined, jwtHeader: jwtHeader ? '<found>' : undefined,
-    })
-    const jwt = jwtFromBody || jwtField || jwtHeader || jar.get(hostOf(LOGIN_BASE), 'jwt')
-
-    // 4) authtoken -> authToken, then the RWB endpoints authenticate with
-    //    Authorization: Basic base64("JWT:" + authToken)  (confirmed from a portal
-    //    Copy-as-cURL). Cookie Instance=ndv2 selects the instance.
-    let portalAuthed = false
-    if (jwt) {
-      const ref = `${portalBase}/deliverit/dirouteworkbench/index.html`
-      const at = await go(jar, 'POST', `${portalBase}/deliverit/instance/ndv2/openapi/loginreg/authtoken/${COMPANY}`, {
-        headers: { 'content-type': 'application/json', origin: portalBase, referer: ref },
-        body: JSON.stringify({ username: 'jwt', password: jwt }),
-      })
-      const authToken = at.data && (at.data.authToken || at.data.token || at.data.jwtToken)
-      steps.push({ step: 'authtoken', status: at.status, authTokenFound: !!authToken })
-
-      const rwbAuth = authToken
-        ? { authorization: 'Basic ' + Buffer.from(`JWT:${authToken}`).toString('base64'), cookie: 'Instance=ndv2' }
-        : {}
-      // verify with a read-only RWB GET
-      const rwb = await go(jar, 'GET', `${portalBase}/deliverit/dirouteworkbench/routePlan/getFilter?listName=RWStop`, {
-        headers: { referer: ref, ...rwbAuth },
-      })
-      portalAuthed = rwb.status === 200
-      steps.push({ step: 'RWB getFilter (Basic JWT)', status: rwb.status, authed: portalAuthed, bodySnip: (rwb.text || '').slice(0, 120) })
-    } else {
-      steps.push({ step: 'JWT', found: false, note: 'could not locate JWT from userLogin — inspect bodySnip above' })
+    if (op === 'probe') {
+      const chk = await go(sess.jar, 'GET', `${portalBase}/deliverit/dirouteworkbench/routePlan/getFilter?listName=RWStop`, { headers: rwbHeaders })
+      return json(200, { ok: chk.status === 200, steps: sess.steps, getFilter: chk.status })
     }
 
-    return json(200, { ok: portalAuthed, target: { companyCode, COMPANY, portalBase, username }, steps })
+    if (op === 'rwb') {
+      // generic authed request: { method, path, query?, form?, json? }
+      const method = (req.method || 'GET').toUpperCase()
+      let url = `${portalBase}/deliverit/${String(req.path || '').replace(/^\//, '')}`
+      if (req.query) url += (url.includes('?') ? '&' : '?') + new URLSearchParams(req.query).toString()
+      let body, extra = {}
+      if (req.form) {
+        const f = new FormData()
+        for (const [k, v] of Object.entries(req.form)) f.set(k, String(v))
+        body = f
+      } else if (req.json) { body = JSON.stringify(req.json); extra = { 'content-type': 'application/json' } }
+      const r = await go(sess.jar, method, url, { headers: { ...rwbHeaders, origin: portalBase, ...extra }, body })
+      return json(200, { ok: r.status >= 200 && r.status < 300, status: r.status, body: r.data ?? r.text.slice(0, 4000) })
+    }
+
+    if (op === 'reorder') {
+      const { routePlanId, stopIds } = req
+      if (!routePlanId || !Array.isArray(stopIds) || !stopIds.length) return json(400, { error: 'reorder needs routePlanId and stopIds[]' })
+      const f = new FormData()
+      f.set('routePlanId', routePlanId)
+      f.set('stopIds', stopIds.join(','))
+      f.set('isPlanningMode', req.isPlanningMode == null ? 'true' : String(req.isPlanningMode))
+      if (req.csrf) f.set('_csrf', req.csrf)
+      const r = await go(sess.jar, 'POST', `${portalBase}/deliverit/dirouteworkbench/stop/addStopsToRouteAfterValidation`, {
+        headers: { ...rwbHeaders, origin: portalBase }, body: f,
+      })
+      return json(200, { ok: r.status >= 200 && r.status < 300, status: r.status, body: r.data ?? r.text.slice(0, 2000) })
+    }
+
+    return json(400, { error: `unknown op "${op}"` })
   } catch (err) {
-    return json(502, { error: (err && err.message) || 'probe error', steps })
+    return json(502, { error: (err && err.message) || 'error' })
   }
 }
