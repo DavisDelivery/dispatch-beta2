@@ -22,7 +22,9 @@
 // Gated by NUVIZZ_WRITE_ENABLED. Credentials: portal login uses NUVIZZ_PORTAL_USER /
 // NUVIZZ_PORTAL_PASS if set, else falls back to NUVIZZ_DAVIS_USER / NUVIZZ_DAVIS_PASS.
 
-const LOGIN_BASE = 'https://login.nuvizz.com'
+// Login gateway differs by environment: PROD = login.nuvizz.com, UAT/QA = loginqa.nuvizz.com
+// (uat.nuvizz.com/deliverit redirects to loginqa.nuvizz.com/loginreg). Overridable per request.
+const DEFAULT_LOGIN_BASE = 'https://login.nuvizz.com'
 
 function json(statusCode, body) {
   return { statusCode, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' }, body: JSON.stringify(body) }
@@ -96,6 +98,7 @@ exports.handler = async (event) => {
   const companyCode = req.companyCode || 'davis'          // login companyCode (lowercase in HAR)
   const COMPANY = (req.company || companyCode).toUpperCase() // path segment for authtoken
   const portalBase = req.portalBase || 'https://portal.nuvizz.com'
+  const LOGIN_BASE = req.loginBase || DEFAULT_LOGIN_BASE
   const username = req.username || process.env.NUVIZZ_PORTAL_USER || process.env.NUVIZZ_DAVIS_USER
   const password = req.password || process.env.NUVIZZ_PORTAL_PASS || process.env.NUVIZZ_DAVIS_PASS
   if (!username || !password) return json(500, { error: 'no portal creds (NUVIZZ_PORTAL_USER/PASS or NUVIZZ_DAVIS_USER/PASS)' })
