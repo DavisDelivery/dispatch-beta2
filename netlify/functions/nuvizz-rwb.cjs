@@ -116,10 +116,15 @@ exports.handler = async (event) => {
   const cfg = { LOGIN_BASE, portalBase, companyCode, COMPANY, username, password }
 
   try {
-    const sess = await portalLogin(cfg)
+    // authToken passthrough: skip the full login and use a caller-supplied token
+    // (e.g. captured from a browser cURL). Otherwise do the full portal login.
+    const sess = req.authToken
+      ? { authToken: req.authToken, jar: makeJar(), steps: [{ step: 'authToken passthrough' }], ref: `${portalBase}/deliverit/dirouteworkbench/index.html` }
+      : await portalLogin(cfg)
     if (sess.error) return json(200, { ok: false, ...sess })
     const basic = 'Basic ' + Buffer.from(`JWT:${sess.authToken}`).toString('base64')
-    const rwbHeaders = { authorization: basic, cookie: 'Instance=ndv2', referer: sess.ref }
+    const cookieParts = ['Instance=ndv2', ...(req.session ? [`SESSION=${req.session}`] : [])]
+    const rwbHeaders = { authorization: basic, cookie: cookieParts.join('; '), referer: sess.ref }
 
     if (op === 'probe') {
       const chk = await go(sess.jar, 'GET', `${portalBase}/deliverit/dirouteworkbench/routePlan/getFilter?listName=RWStop`, { headers: rwbHeaders })
