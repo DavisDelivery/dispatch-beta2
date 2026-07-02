@@ -114,16 +114,23 @@ the incremental reskin), a token theme (`src/styles/theme.css`, HSL vars, dark-f
   yet captured). Each lane also has a **Dispatch** button → `usePlanning().dispatchLoad` → write fn
   `dispatchLoad` op → same endpoint with `{action:'DISPATCH',dispatchRoute:[{routeId:loadId}]}` (releases
   the load to its assigned driver).
-- **Manual sequencing (v0.30.0)**: NuVizz auto-optimizes a BULK `insertStops` but APPENDS a
-  single insert — so stop order is controllable by inserting one-at-a-time. Each load lane
-  shows stops in NuVizz's real `to.seq` order (captured by `reconcile`, surfaced via
-  `normalizeLoad`'s `seq` = `stop.to.seq`) with number badges + ▲▼ reorder. Reordering builds a
-  local draft; **Apply order** commits via `usePlanning().sequenceLoad` → keep the first stop as
-  an anchor (removing ALL stops cancels the route), `removeStops` the rest, then re-insert them
-  one-at-a-time in order. Cost ≈ 2 + (N−1) calls. The order is REAL (reaches the driver).
-  **The cheaper batch path exists now**: the async `load/update` import (`loadImport` op)
-  creates or REBUILDS a whole load in the exact `stops[]` array order in ONE call — verified
-  live Jul 1 2026; full contract in `docs/NUVIZZ_API.md` §10.1 (UI not migrated to it yet).
+- **Manual sequencing (v0.35.0 — the LOAD IMPORT path)**: each load lane shows stops in
+  NuVizz's real `to.seq` order (captured by `reconcile`, surfaced via `normalizeLoad`'s
+  `seq` = `stop.to.seq`) with number badges + ▲▼ reorder; edits build a local draft that
+  Save commits. `usePlanning().sequenceLoad` + `commit` now run the **§10.1 load import**
+  (`docs/NUVIZZ_API.md`): ONE declarative `load/update/default` per touched load — the
+  `stops[]` array order IS the visit order; omitted stops are unplanned; sequence-aligned
+  30-min delivery windows ride inside the payload (no per-stop window writes; the old
+  `setStopWindow` full-upsert, which blanked freight fields, is retired). The engine
+  (`src/lib/loadImport.js` + `src/lib/loadImportEngine.js`) echoes every to-block/header
+  from NuVizz's own reads, then CONVERGES: poll `load/info` (backoff ~6/10/15/25s, ≤5
+  polls), compare read-back order (normalized stopNbrs, delivery stops by `to.seq`);
+  resend once, then reversed + desired to unstick; ok ONLY from the read-back. Cross-load
+  moves import sources before destinations; an emptied load goes through `load/cancel`
+  (never an empty import / remove-all, which cancelled the route implicitly). The old
+  anchor method (keep-first + removeStops + one-at-a-time re-insert, ≈2+(N−1) calls) is
+  retired from the active path but documented in §10.1 as history; a SINGLE `insertStops`
+  still APPENDS and remains the incremental add fallback (a BULK insert geo-reoptimizes).
 - **Sync (reconcile)**: the registry's `plannedLoadNbr` is local and can drift from NuVizz reality
   (e.g. planned-shows-unplanned). `usePlanning().reconcile()` reads each relevant load (`KNOWN_LOADS`
   + any load an order claims) ONCE via `getLoad` — a scoped, cheap "scan" (NOT the davis-nuvizz
