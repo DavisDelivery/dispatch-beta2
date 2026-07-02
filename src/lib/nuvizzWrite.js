@@ -8,7 +8,9 @@
 //   createStop   -> POST /stop/sync/update/{cc}   (create/upsert an order)
 //   insertStops  -> POST /load/insertstops/{cc}   (attach existing stops to a load)
 //   removeStops  -> POST /load/edit/{cc}          (unplan stops; full-header echo)
-//   getStop/getLoad -> GET reads for live readback
+//   importLoads  -> POST /load/update/default/{cc} (§10.1 batch sequencing import)
+//   cancelLoad   -> POST /load/cancel/{cc}        (retire/empty a load cleanly)
+//   getStop/getLoad -> GET reads for live readback + import convergence
 
 const WRITE_FN = '/.netlify/functions/nuvizz-write'
 
@@ -167,42 +169,13 @@ export function buildStopPayload(row, s) {
   }
 }
 
-// Stamp a stop with the 30-minute delivery slot for its visit position (0-based
-// `index`) — the displayed ETA, kept aligned to the route order (it does NOT drive
-// order; see §10). A PARTIAL upsert blanks the destination address, so we always
-// send a full stop payload. When the order
-// already carries its address + serviceDate (created in-app) we rebuild from it
-// (1 NuVizz call); otherwise we read the stop first to preserve addr2 and its
-// service date (2 calls). The origin window is pinned before the delivery slot.
-export async function setStopWindow(creds, order, index, opts = {}) {
-  let to, origin, date
-  const haveAddr = order && order.addr1 && order.city && order.state && order.zip
-  if (haveAddr && order.serviceDate) {
-    to = { name: order.name, addr1: order.addr1, addr2: order.addr2, city: order.city, state: order.state, zip: order.zip }
-    origin = opts.origin || DEFAULT_ORIGIN
-    date = order.serviceDate
-  } else {
-    const st = (await getStop(creds, order.stopNbr))?.data?.Stop?.stop
-    const a = st?.to?.address
-    if (!a) return { ok: false, message: `Stop ${order.stopNbr} not found` }
-    const fa = st.from?.address || {}
-    to = { name: a.name, addr1: a.addr1, addr2: a.addr2, city: a.city, state: a.state, zip: a.zip }
-    origin = { name: fa.name, addr1: fa.addr1, addr2: fa.addr2, city: fa.city, state: fa.state, zip: fa.zip }
-    date = (st.to?.schedule?.timeFrom || st.from?.schedule?.timeFrom || '').slice(0, 10)
-  }
-  if (!date) return { ok: false, message: `No service date for ${order.stopNbr}` }
-  const slot = deliverySlot(index, opts)
-  const stop = {
-    stopNbr: order.stopNbr,
-    stopType: 'DO',
-    shipmentType: 'REG',
-    stopExecution: 'APP',
-    sourceType: 'INTG',
-    from: { address: addrPayload(origin), schedule: sched(date, ORIGIN_WINDOW.from, ORIGIN_WINDOW.to) },
-    to: { address: addrPayload(to), schedule: sched(date, slot.from, slot.to) },
-  }
-  return summarize(await createOrder(creds, stop))
-}
+// NOTE: the old `setStopWindow` helper (a full stop/sync/update upsert that
+// re-stamped a stop's delivery slot) was REMOVED with the §10.1 import migration:
+// delivery windows now ride INSIDE the load-import payload (see lib/loadImport.js
+// importRefFromRaw), so the sequencing path makes no separate per-stop window
+// writes. That also retires the field-blanking hazard — the upsert replaced the
+// whole stop, so omitting proNumber/pallets/weight BLANKED them; an import
+// reference leaves the stop's other fields intact.
 
 // Pull a friendly success/error summary out of the upstream NuVizz response.
 export function summarize(resp) {
@@ -234,6 +207,16 @@ export const removeStops = (creds, loadNbr, removeStopIds) =>
 export const assignDriver = (creds, loadId, driverId) =>
   call('assignDriver', creds, { loadId, driverId })
 export const dispatchLoad = (creds, loadId) => call('dispatchLoad', creds, { loadId })
+// The async LOAD IMPORT (§10.1) — one POST load/update/default/{cc} per touched
+// load sets its complete stop list in exact stops[] array order. The 200 ack is
+// async ("Async import is SUCCESS") and does NOT mean it landed — callers MUST run
+// the convergence read-back (see src/lib/loadImportEngine.js).
+export const importLoads = (creds, loads, serviceName) =>
+  call('loadImport', creds, { loads, ...(serviceName ? { serviceName } : {}) })
+// Cancel (retire) a load cleanly — the ONLY sanctioned way to empty one (an empty
+// stops[] import is never sent; the old remove-all path cancelled implicitly).
+export const cancelLoad = (creds, { loadNbr, loadId, reasonCode, reasonComments } = {}) =>
+  call('cancelLoad', creds, { loadNbr, loadId, reasonCode, reasonComments })
 
 // assignanddispatch returns { status: 'Success', reasons: [] } — summarize()
 // keys on 'SUCCESS', so check this shape directly.

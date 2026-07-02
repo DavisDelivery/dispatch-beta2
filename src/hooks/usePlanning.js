@@ -4,9 +4,17 @@
 //
 // loadId resolution: from KNOWN_LOADS, else a cached one-time getLoad per load
 // number (localStorage dd_loadid_cache) so a load is read at most once, ever.
+//
+// SEQUENCING + Draft→Save run the LOAD IMPORT path (docs/NUVIZZ_API.md §10.1):
+// one declarative POST load/update per touched load + a mandatory convergence
+// read-back (src/lib/loadImportEngine.js). insertStops/removeStops remain for the
+// incremental plan/unplan actions (a SINGLE insert appends — the one-at-a-time
+// append is the fallback ordering control; a BULK insert gets geo-reoptimized).
 
 import { useCallback, useState } from 'react'
-import { getLoad, insertStops, removeStops, assignDriver, dispatchLoad as apiDispatchLoad, assignOk, normalizeLoad, summarize, setStopWindow } from '../lib/nuvizzWrite.js'
+import { getLoad, insertStops, removeStops, assignDriver, dispatchLoad as apiDispatchLoad, assignOk, normalizeLoad, summarize } from '../lib/nuvizzWrite.js'
+import { applyLoadOrder } from '../lib/loadImportEngine.js'
+import { planCommitOrder } from '../lib/loadImport.js'
 import { useCreatedOrders } from './useCreatedOrders.js'
 import { KNOWN_LOADS } from '../lib/loads.js'
 
@@ -163,155 +171,113 @@ export function usePlanning() {
     }
   }, [resolveLoadId])
 
-  // Set a load's stop order in NuVizz to exactly `orderedStopNbrs`.
-  // ORDER MECHANISM (verified live): a BULK insertStops gets re-optimized by NuVizz
-  // geographically (it ignores both array order AND delivery windows). The only
-  // reliable control is a ONE-AT-A-TIME insert, which APPENDS each stop — so the
-  // final order is exactly the insertion order. We also stamp each stop with a
-  // 30-minute delivery slot in that same order, so the driver's ETA matches the
-  // route position (the window is the displayed appointment, NOT the ordering lever).
+  // Set a load's stop order in NuVizz to exactly `orderedStopNbrs` — the LOAD
+  // IMPORT path (docs/NUVIZZ_API.md §10.1): ONE declarative POST load/update sets
+  // the load's complete stop list in exact stops[] array order, then the engine
+  // polls load/info until the read-back order matches (never trust the async 200
+  // ack). The sequence-aligned 30-min delivery slots (the driver-visible
+  // appointment, NOT the ordering lever) ride INSIDE the import payload — no
+  // separate per-stop window writes. On-load stops omitted from `orderedStopNbrs`
+  // are PRESERVED (appended in their current order): a reorder never unplans.
+  // (The old anchor method — keep-first + removeStops + one-at-a-time re-insert —
+  // is retired from this path; single-insert append remains available via
+  // insertStops for incremental adds. See §10.1 for the history.)
   const sequenceLoad = useCallback(
     async (loadNbr, orderedStopNbrs) => {
-      const byNbr = new Map(orders.map((o) => [o.stopNbr, o]))
-      const items = orderedStopNbrs.map((sn) => byNbr.get(sn)).filter((o) => o && o.stopId)
-      if (items.length < 2) return { ok: false, message: 'Need 2+ stops to sequence.' }
-      try {
-        const loadId = await resolveLoadId(loadNbr)
-        let calls = 0
-        // 1) Stamp sequence-aligned 30-min ETA windows (cosmetic; does not set order).
-        for (let i = 0; i < items.length; i++) {
-          const r = await setStopWindow({}, items[i], i)
-          calls++
-          if (!r.ok) return { ok: false, message: `Window ${items[i].stopNbr}: ${r.message}` }
-        }
-        // 2) Rebuild: keep the first stop as anchor (removing ALL stops cancels the
-        //    route), remove the rest, then re-insert one-at-a-time in order (a single
-        //    insert appends, so the final order is exactly [first, …rest]).
-        const [first, ...rest] = items
-        const rem = summarize(await removeStops({}, loadNbr, rest.map((o) => o.stopId)))
-        calls++
-        if (!rem.ok) return { ok: false, message: `Couldn’t reorder: ${rem.message}` }
-        for (const o of rest) {
-          const r = summarize(await insertStops({}, loadId, [o.stopId]))
-          calls++
-          if (!r.ok) return { ok: false, message: `Re-inserting ${o.stopNbr} failed: ${r.message}` }
-        }
-        void first
-        // optimistic local order so the board reflects it before the next reconcile
-        setSequenceByLoad((m) => ({ ...m, [loadNbr]: items.map((o) => o.stopNbr) }))
-        return { ok: true, message: `Sequenced ${items.length} stop(s) on ${loadNbr}.`, calls }
-      } catch (e) {
-        return { ok: false, message: e.message }
+      const wanted = [...new Set((orderedStopNbrs || []).map((sn) => String(sn)).filter(Boolean))]
+      if (wanted.length < 2) return { ok: false, message: 'Need 2+ stops to sequence.' }
+      const r = await applyLoadOrder({ loadNbr, desiredStopNbrs: wanted })
+      if (r.ok) {
+        // read-back order (converged truth) so the board reflects NuVizz reality
+        setSequenceByLoad((m) => ({ ...m, [loadNbr]: r.order || wanted }))
+        return { ok: true, message: r.unchanged ? r.message : `Sequenced ${wanted.length} stop(s) on ${loadNbr}.`, calls: r.calls }
       }
+      return { ok: false, message: r.message, calls: r.calls }
     },
-    [orders, resolveLoadId],
+    [],
   )
 
-  // Commit a whole desired board arrangement to NuVizz in one pass (draft → Save).
-  // `desiredByLoad` is an array of [loadNbr, orderedOrders[]] (orders carry stopId);
-  // any planned order not present in it is treated as moved to Unassigned.
-  // Phase 1 unplans every departure (current load ≠ desired). Phase 2 stamps each
-  // load's stops with sequence-aligned 30-min ETA windows (cosmetic) then rebuilds it
-  // to the exact desired order via keep-first-anchor + remove-rest + insert
-  // ONE-AT-A-TIME (a bulk insert gets geo-reoptimized; a single insert appends, so
-  // insertion order IS the final order). Cost is bounded by loads touched + their stops.
+  // Commit a whole desired board arrangement to NuVizz in one pass (draft → Save) —
+  // the LOAD IMPORT path (docs/NUVIZZ_API.md §10.1). `desiredByLoad` is an array of
+  // [loadNbr, orderedOrders[]]; any planned order not present in it is treated as
+  // moved to Unassigned.
+  //
+  // ONE declarative import per touched load: stop set + order become exactly the
+  // stops[] array; departures are simply OMITTED (declarative unplan — the stop
+  // record survives). Cross-load moves run SOURCES BEFORE DESTINATIONS (import A
+  // without the stop first, then B with it — never rely on a declarative steal);
+  // planCommitOrder topologically sorts the batch and refuses a genuine cycle
+  // (a two-load swap — save it as two steps). A load the draft EMPTIES is retired
+  // via load/cancel, explicitly — an empty stops[] import is never sent, and the
+  // old remove-all path (which cancelled the route as a side effect) is gone.
+  // Convergence is mandatory per load: ok comes only from a read-back whose order
+  // matches; a stuck source stops the batch (later loads may depend on its unplans).
   const commit = useCallback(
     async (desiredByLoad) => {
-      const byNbr = new Map(orders.map((o) => [o.stopNbr, o]))
+      // Departures: every order whose current load ≠ its desired load.
       const desiredLoadOf = new Map()
       for (const [loadNbr, list] of desiredByLoad) for (const o of list) desiredLoadOf.set(o.stopNbr, loadNbr)
-
-      const onLoad = new Map() // loadNbr -> Set(stopNbr) currently on the load
-      for (const o of orders)
-        if (o.plannedLoadNbr) {
-          if (!onLoad.has(o.plannedLoadNbr)) onLoad.set(o.plannedLoadNbr, new Set())
-          onLoad.get(o.plannedLoadNbr).add(o.stopNbr)
-        }
-
-      const errors = []
-      let calls = 0
-
-      // Phase 1 — unplan departures (incl. moves to Unassigned).
-      const departByLoad = new Map()
+      const departByLoad = new Map() // loadNbr -> [stopNbr]
       for (const o of orders) {
         const base = o.plannedLoadNbr || null
         const want = desiredLoadOf.get(o.stopNbr) || null
-        if (base && base !== want && o.stopId) {
+        if (base && base !== want) {
           if (!departByLoad.has(base)) departByLoad.set(base, [])
-          departByLoad.get(base).push(o)
+          departByLoad.get(base).push(o.stopNbr)
         }
-      }
-      for (const [loadNbr, list] of departByLoad) {
-        const r = summarize(await removeStops({}, loadNbr, list.map((o) => o.stopId)))
-        calls++
-        if (r.ok) {
-          setPlanned(list.map((o) => o.stopNbr), null)
-          list.forEach((o) => onLoad.get(loadNbr)?.delete(o.stopNbr))
-        } else errors.push(`unplan ${loadNbr}: ${r.message}`)
       }
 
-      // Phase 2 — rebuild each load to its exact desired order, window-encoded.
-      for (const [loadNbr, ordered] of desiredByLoad) {
-        if (!ordered.length) continue
-        try {
-          const loadId = await resolveLoadId(loadNbr)
-          // Stamp sequence-aligned 30-min ETA windows (cosmetic; does not set order).
-          let windowFailed = false
-          for (let i = 0; i < ordered.length; i++) {
-            const r = await setStopWindow({}, ordered[i], i)
-            calls++
-            if (!r.ok) {
-              errors.push(`${loadNbr} window ${ordered[i].stopNbr}: ${r.message}`)
-              windowFailed = true
-              break
-            }
-          }
-          if (windowFailed) continue
-          const cur = onLoad.get(loadNbr) || new Set()
-          const first = ordered[0]
-          if (!cur.has(first.stopNbr)) {
-            const r = summarize(await insertStops({}, loadId, [first.stopId]))
-            calls++
-            if (!r.ok) {
-              errors.push(`${loadNbr} add ${first.stopNbr}: ${r.message}`)
-              continue
-            }
-            cur.add(first.stopNbr)
-          }
-          const removeNbrs = [...cur].filter((n) => n !== first.stopNbr)
-          if (removeNbrs.length) {
-            const r = summarize(await removeStops({}, loadNbr, removeNbrs.map((n) => byNbr.get(n)?.stopId).filter(Boolean)))
-            calls++
-            if (!r.ok) {
-              errors.push(`${loadNbr} reorder: ${r.message}`)
-              continue
-            }
-            removeNbrs.forEach((n) => cur.delete(n))
-          }
-          // Re-insert the rest ONE-AT-A-TIME, in order — a single insert appends, so
-          // the final sequence is exactly `ordered` (a bulk insert would be geo-
-          // reoptimized and lose the dispatcher's order).
-          let insertFailed = false
-          for (const o of ordered.slice(1)) {
-            const r = summarize(await insertStops({}, loadId, [o.stopId]))
-            calls++
-            if (!r.ok) {
-              errors.push(`${loadNbr} insert ${o.stopNbr}: ${r.message}`)
-              insertFailed = true
-              break
-            }
-            cur.add(o.stopNbr)
-          }
-          if (insertFailed) continue
-          setSequenceByLoad((m) => ({ ...m, [loadNbr]: ordered.map((o) => o.stopNbr) }))
-          setPlanned(ordered.map((o) => o.stopNbr), loadNbr)
-        } catch (e) {
-          errors.push(`${loadNbr}: ${e.message}`)
+      // One commit entry per touched load. arrivalsFrom = the loads this one gains
+      // stops from (orders the entry's list whose current load is another load).
+      const entries = []
+      const touched = new Set()
+      for (const [loadNbr, list] of desiredByLoad) {
+        touched.add(loadNbr)
+        entries.push({
+          loadNbr,
+          desiredStopNbrs: list.map((o) => o.stopNbr),
+          dropStopNbrs: departByLoad.get(loadNbr) || [],
+          arrivalsFrom: [...new Set(list.map((o) => o.plannedLoadNbr).filter((l) => l && l !== loadNbr))],
+        })
+      }
+      // Loads that only LOSE stops (all their orders departed / draft emptied them).
+      for (const [loadNbr, stopNbrs] of departByLoad) {
+        if (touched.has(loadNbr)) continue
+        entries.push({ loadNbr, desiredStopNbrs: [], dropStopNbrs: stopNbrs, arrivalsFrom: [] })
+      }
+      if (!entries.length) return { ok: true, message: 'Nothing to commit.', calls: 0 }
+
+      let ordered
+      try {
+        ordered = planCommitOrder(entries)
+      } catch (e) {
+        return { ok: false, message: e.message, calls: 0 }
+      }
+
+      const errors = []
+      let calls = 0
+      for (const entry of ordered) {
+        const r = await applyLoadOrder({ loadNbr: entry.loadNbr, desiredStopNbrs: entry.desiredStopNbrs, dropStopNbrs: entry.dropStopNbrs })
+        calls += r.calls || 0
+        if (!r.ok) {
+          // Sources before destinations: a stuck source must not let a destination
+          // "steal" a still-planned stop — stop the batch here.
+          errors.push(`${entry.loadNbr}: ${r.message}`)
+          break
+        }
+        if (entry.dropStopNbrs.length) setPlanned(entry.dropStopNbrs, null)
+        if (entry.desiredStopNbrs.length) {
+          setPlanned(entry.desiredStopNbrs, entry.loadNbr)
+          setSequenceByLoad((m) => ({ ...m, [entry.loadNbr]: r.order || entry.desiredStopNbrs }))
         }
       }
-      return { ok: !errors.length, message: errors.length ? errors.join(' · ') : `Committed to NuVizz (${calls} call${calls === 1 ? '' : 's'}).`, calls }
+      return {
+        ok: !errors.length,
+        message: errors.length ? errors.join(' · ') : `Committed to NuVizz (${calls} call${calls === 1 ? '' : 's'}).`,
+        calls,
+      }
     },
-    [orders, resolveLoadId, setPlanned],
+    [orders, setPlanned],
   )
 
   return { orders, plan, unplan, reconcile, dispatchDriver, dispatchLoad, sequenceByLoad, sequenceLoad, commit }

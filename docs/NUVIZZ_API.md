@@ -176,8 +176,9 @@ weight, pro`). Settings: the origin/depot + service date.
 The **`to.schedule` is a 30-minute delivery slot staggered by the stop's visit index**
 (`deliverySlot(index)`): index 0 → 08:00–08:30, 1 → 08:30–09:00, … This is the **displayed
 ETA/appointment** only — it does NOT set the visit order (NuVizz's optimizer ignores it; order
-comes from one-at-a-time insertion, see §10). The **`from.schedule`** (pickup) is pinned to
-**06:00–07:00**, before every delivery slot (NuVizz rejects `from > to`).
+comes from the **load import**, §10.1 — one-at-a-time insertion is the incremental fallback,
+see §10). The **`from.schedule`** (pickup) is pinned to **06:00–07:00**, before every delivery
+slot (NuVizz rejects `from > to`).
 
 Gotchas (learned live): do **not** send `shipForBP` or `profile` on the open
 import ("ShipForBP is Invalid" / "profile … does not exist"). NuVizz geocodes
@@ -322,7 +323,10 @@ ROS→MAR→DEC. A control load + two lever-conflict loads were cancelled after 
 - **Robust recipe (self-healing, still O(1) calls per load):** after EVERY import, poll
   `load/info` and compare `to.seq` to the requested order. Converged → done. Not converged
   after ~60–90 s → re-send the same import; if still stuck, send the array REVERSED, then
-  the desired order (verified to unstick it). Never trust the 200 alone.
+  the desired order (verified to unstick it). Never trust the 200 alone. **This recipe is
+  what the app now runs**: `src/lib/loadImport.js` (pure builders/comparators/planner) +
+  `src/lib/loadImportEngine.js` (`applyLoadOrder` — read, echo, import, converge) behind
+  `usePlanning.sequenceLoad` and `usePlanning.commit`.
 - Injection therefore = 1 import (add, appends) + 1–2 reorder imports (seat it) — constant
   calls, vs the anchor+remove+re-insert path's ~2N+1.
 
@@ -334,33 +338,55 @@ ROS→MAR→DEC. A control load + two lever-conflict loads were cancelled after 
 > slots we stamp (`deliverySlot(index)`) are the **displayed ETA/appointment**, kept aligned to
 > the chosen sequence — they are NOT the ordering mechanism.
 
-**Setting a stop's window** (`setStopWindow`, cosmetic ETA): a PARTIAL `stop/sync/update` (just
-`stopNbr` + `to.schedule`) **blanks/replaces the destination address** — so always send a FULL
-stop payload. When the order carries its address + `serviceDate` (created in-app) we rebuild from
-it (1 call); otherwise we read the stop first to preserve `addr2` + its date (2 calls). The
-origin/pickup window must sit **before** every delivery slot (NuVizz rejects `from > to`), so
-it's pinned to 06:00–07:00.
+**Setting a stop's window** (delivery-slot ETA): the 30-min sequence-aligned slots are the
+**driver-visible appointment only** and now ride **inside the import payload** (each stop
+reference's `to.schedule`, stamped by visit position) — the sequencing path makes **no separate
+per-stop window writes**. The old `setStopWindow` helper (a full `stop/sync/update` upsert per
+stop) is **retired**: a partial upsert blanks/replaces whatever it omits — it blanked the
+destination address, and even the "full" rebuild blanked freight fields (`proNumber`/`pallets`/
+`weight`) not carried on the order record. An import *reference* leaves the stop's other fields
+intact (§10.1), which eliminates that whole hazard class. The origin/pickup window must still sit
+**before** every delivery slot (NuVizz rejects `from > to`), so creates pin it to 06:00–07:00.
 
-**Re-sequencing an existing load** (`usePlanning.sequenceLoad` / the `commit` engine):
-1. (Optional, cosmetic) `setStopWindow` each stop to its 30-min slot so the ETA matches the order.
-2. ⚠️ **Removing ALL stops cancels the route** ("Cannot insert stops to a Cancelled route"),
-   so keep the FIRST desired stop as an **anchor**; `removeStops` the rest.
-3. Re-insert the rest **one-at-a-time** in order — each append lands at the end, so the final
-   sequence is exactly `[first, …rest]`.
-4. Cost ≈ `2 + (N−1)` inserts (+ `N` window calls if you also stamp ETAs).
+**Re-sequencing an existing load** (`usePlanning.sequenceLoad` / the `commit` engine — the
+**LOAD IMPORT path**, `src/lib/loadImport.js` + `src/lib/loadImportEngine.js`):
+1. `load/info` once — the echo source for the header (trap fields) and every on-load stop's
+   `to` block. Stops not on the load (arrivals) are echoed from `stop/info` — **echo, never
+   invent**; a bare `stopNbr` reference is rejected.
+2. ONE declarative `load/update/default/{cc}` import with `stops[]` in the desired order
+   (array order = visit order). On-load stops omitted from a *reorder* request are PRESERVED
+   (appended in current order) — only the commit engine's explicit departures are omitted
+   (declarative unplan). Delivery-slot windows ride inside the payload.
+3. **Converge** (mandatory): poll `load/info` on the ~6/10/15/25s ladder (≤5 polls), comparing
+   the read-back delivery order (sorted by `to.seq`, stopNbrs normalized: trim/uppercase/strip
+   leading zeros, and only when every delivery has a real `to.seq`) to the requested array.
+   Not converged → re-send the SAME import once; still stuck → send the array REVERSED, one
+   beat, then the desired order (verified unstick). `ok` comes ONLY from the read-back; a 404
+   while a new load is being created is not-yet-converged, not failure.
+4. If the requested state would leave the load EMPTY → **`load/cancel`**, never an empty
+   `stops[]` import (and never remove-all, which cancelled the route as a side effect).
+5. Cost: 1 read + 1 import + ~1 poll when the worker is prompt — O(1) per load vs the anchor
+   method's ~2N+1.
 
-**Injecting an order into the MIDDLE of a route.** There is no cheap single-call middle insert —
-a lone `insertStops` always **appends to the end** (verified: a stop inserted between two existing
-stops landed last, not in the middle). To place a stop at position *k*: keep the stops before *k*
-as anchors, `removeStops` the stops from *k* onward, then re-insert the new stop **followed by**
-the removed tail, **one-at-a-time**. The new stop and the tail re-append in that exact order, so
-the injected stop sits at *k*. The `commit` engine does the general case (rebuild each touched
-load to its full desired order).
+*(History/fallback — the ruled-out anchor method, the pre-import engine: keep the FIRST desired
+stop as an anchor because removing ALL stops cancels the route, `removeStops` the rest, then
+re-insert one-at-a-time in order, each append landing at the end; cost ≈ 2 + (N−1) calls, plus N
+per-stop window writes. It works and single-insert-appends remains the incremental append
+fallback, but it is O(N) calls, its window writes carried the field-blanking hazard above, and
+emptying a load cancelled the route implicitly. Middle-injection under that method meant keeping
+the pre-*k* stops as anchors, removing from *k* on, and re-inserting the new stop + tail
+one-at-a-time. On the import path, injection = 1 import (the add APPENDS on its first import) +
+the resend that seats it — the convergence loop does this automatically.)*
 
-**Draft → Save (batch) pattern** (`usePlanning.commit`): stage all moves/reorders
-locally (zero calls), then commit — Phase 1 unplans departures, Phase 2 rebuilds each touched
-load to its exact desired order (anchor + remove-rest + one-at-a-time re-insert). Cost is bounded
-by *loads touched + their stops*, not by how many moves were dragged.
+**Draft → Save (batch) pattern** (`usePlanning.commit`): stage all moves/reorders locally (zero
+calls), then commit — ONE declarative import per touched load: stop set + order become exactly
+that load's `stops[]`; departures are simply omitted (the stop record survives, unplanned).
+Cross-load moves run **sources before destinations** (import A *without* the stop first, then B
+*with* it — never rely on a declarative steal); `planCommitOrder` topologically sorts the batch
+and refuses a genuine cycle (a two-load swap — save it as two steps). A load the draft empties is
+retired via `load/cancel`, explicitly. Each load converges (read-back) before the next dependent
+load fires; a stuck source stops the batch. Cost is bounded by *loads touched* (reads + 1 import
++ polls each), not by how many moves were dragged.
 
 **`seqMode:'Manual'` does NOT give a cheaper path (tested, ruled out).** Exhaustively tested on
 **5 fresh empty loads** (`setSeqMode` op + the portal's own Manual toggle), both `STRICT` and
