@@ -218,12 +218,16 @@ exports.handler = async (event) => {
         return json(200, r)
       }
       case 'loadImport': {
-        // Full ordered-load import (load/update/{serviceName}) — the §10.1 batch
-        // sequencing lever (verified live Jul 1 2026): the stops[] ARRAY ORDER is
-        // the visit order (stopSeq / stopSeqOrder are ignored); re-importing the
-        // same loadNbr is DECLARATIVE (omitted stops are unplanned). The 200 ack is
-        // ASYNC — callers must poll load/info until the read-back order matches
-        // (src/lib/loadImportEngine.js drives that convergence).
+        // Ordered-load import (load/update/{serviceName}) — the §10.1 ORDER lever:
+        // the stops[] ARRAY ORDER is the visit order (stopSeq/stopSeqOrder are
+        // ignored); an OMITTED on-load stop is unplanned (survives). ⚠️ Matching
+        // semantics (UAT-proven Jul 2 2026): an entry matches ONLY a stop already
+        // ON the load — a matched stop is FULL-REPLACED (a partial entry blanks
+        // freight/PRO/refs) and an off-load stopNbr CLONES a brand-new stop record
+        // (membership belongs to insertStops/removeStops, never this op). The 200
+        // ack is ASYNC — callers must poll load/info until the read-back order
+        // matches (src/lib/loadImportEngine.js builds guarded full-echo payloads
+        // and drives that convergence).
         const { loads, serviceName } = req
         if (!Array.isArray(loads) || !loads.length) return json(400, { error: 'loadImport needs loads[]' })
         const svc = encodeURIComponent(serviceName || 'default')

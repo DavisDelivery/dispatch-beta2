@@ -114,23 +114,28 @@ the incremental reskin), a token theme (`src/styles/theme.css`, HSL vars, dark-f
   yet captured). Each lane also has a **Dispatch** button → `usePlanning().dispatchLoad` → write fn
   `dispatchLoad` op → same endpoint with `{action:'DISPATCH',dispatchRoute:[{routeId:loadId}]}` (releases
   the load to its assigned driver).
-- **Manual sequencing (v0.35.0 — the LOAD IMPORT path)**: each load lane shows stops in
+- **Manual sequencing (v0.36.0 — the TWO-LEVER engine)**: each load lane shows stops in
   NuVizz's real `to.seq` order (captured by `reconcile`, surfaced via `normalizeLoad`'s
   `seq` = `stop.to.seq`) with number badges + ▲▼ reorder; edits build a local draft that
-  Save commits. `usePlanning().sequenceLoad` + `commit` now run the **§10.1 load import**
-  (`docs/NUVIZZ_API.md`): ONE declarative `load/update/default` per touched load — the
-  `stops[]` array order IS the visit order; omitted stops are unplanned; sequence-aligned
-  30-min delivery windows ride inside the payload (no per-stop window writes; the old
-  `setStopWindow` full-upsert, which blanked freight fields, is retired). The engine
-  (`src/lib/loadImport.js` + `src/lib/loadImportEngine.js`) echoes every to-block/header
-  from NuVizz's own reads, then CONVERGES: poll `load/info` (backoff ~6/10/15/25s, ≤5
-  polls), compare read-back order (normalized stopNbrs, delivery stops by `to.seq`);
-  resend once, then reversed + desired to unstick; ok ONLY from the read-back. Cross-load
-  moves import sources before destinations; an emptied load goes through `load/cancel`
-  (never an empty import / remove-all, which cancelled the route implicitly). The old
-  anchor method (keep-first + removeStops + one-at-a-time re-insert, ≈2+(N−1) calls) is
-  retired from the active path but documented in §10.1 as history; a SINGLE `insertStops`
-  still APPENDS and remains the incremental add fallback (a BULK insert geo-reoptimizes).
+  Save commits. `usePlanning().sequenceLoad` + `commit` run the two levers of
+  `docs/NUVIZZ_API.md` §10.1 (real import semantics UAT-proven Jul 2 2026: an import
+  entry matches ONLY a stop already ON the load; a matched stop is FULL-REPLACED — unsent
+  fields BLANK; an off-load entry CLONES a brand-new stop record): **membership** via
+  `insertStops` on real stopIds (arrivals; sources release before destinations) or
+  omission from the source's own import (unplans, record survives) — never via import
+  entries; **order** via ONE `load/update/default` per touched load whose every entry is
+  a FULL ECHO of the just-read on-load record (stopType/shipmentType/stopExecution/
+  sourceType/shipmentNbr/proNumber/reference1-3/totalPallets/totalCartons/weight/
+  weightUOM + from/to blocks; freight rides as NUMBERS; the sequence-aligned 30-min
+  delivery window is the one rewritten field — no per-stop window writes; the old
+  `setStopWindow` full-upsert is retired). `buildImportLoad`'s mandatory guard makes an
+  off-load or to-only entry UNREPRESENTABLE. Then CONVERGE: poll `load/info` (backoff
+  ~6/10/15/25s, ≤5 polls), compare read-back order (normalized stopNbrs, delivery stops
+  by `to.seq`); resend once, then reversed + desired to unstick; ok ONLY from the
+  read-back. An emptied load goes through `load/cancel` (never an empty import /
+  remove-all, which cancelled the route implicitly). The old anchor method is documented
+  in §10.1 as history. Engine: `src/lib/loadImport.js` + `src/lib/loadImportEngine.js`
+  (`applyLoadOrder`, `createLoadWithStops` — create gates every stopNbr on a getStop 404).
 - **Sync (reconcile)**: the registry's `plannedLoadNbr` is local and can drift from NuVizz reality
   (e.g. planned-shows-unplanned). `usePlanning().reconcile()` reads each relevant load (`KNOWN_LOADS`
   + any load an order claims) ONCE via `getLoad` — a scoped, cheap "scan" (NOT the davis-nuvizz

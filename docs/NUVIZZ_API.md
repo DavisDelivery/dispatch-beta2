@@ -176,9 +176,9 @@ weight, pro`). Settings: the origin/depot + service date.
 The **`to.schedule` is a 30-minute delivery slot staggered by the stop's visit index**
 (`deliverySlot(index)`): index 0 → 08:00–08:30, 1 → 08:30–09:00, … This is the **displayed
 ETA/appointment** only — it does NOT set the visit order (NuVizz's optimizer ignores it; order
-comes from the **load import**, §10.1 — one-at-a-time insertion is the incremental fallback,
-see §10). The **`from.schedule`** (pickup) is pinned to **06:00–07:00**, before every delivery
-slot (NuVizz rejects `from > to`).
+comes from the **§10.1 full-echo order import**; membership from `insertStops` — see §10).
+The **`from.schedule`** (pickup) is pinned to **06:00–07:00**, before every delivery slot
+(NuVizz rejects `from > to`).
 
 Gotchas (learned live): do **not** send `shipForBP` or `profile` on the open
 import ("ShipForBP is Invalid" / "profile … does not exist"). NuVizz geocodes
@@ -256,7 +256,7 @@ known load (~8 calls) to correct planned/unplanned drift. Replace with the §3.9
 
 ---
 
-## 10. Stop SEQUENCING (manual order) — BATCH via load import (§10.1); one-at-a-time as fallback
+## 10. Stop SEQUENCING (manual order) — TWO LEVERS: membership via insertStops, order via the §10.1 import
 
 The order a driver visits stops is `stop.to.seq` on a load (1 = origin pickup,
 2..N = deliveries). `normalizeLoad` surfaces it as `seq`. Array order in the payload is
@@ -272,30 +272,50 @@ mode: `Far` (farthest first) · `Near` (nearest first) · `None` (shortest-path)
   the same 4 stops one-by-one in `GVL, ATL, KEN, AUS` order yields exactly that `to.seq` order.
 
 So on the *insertStops* path, **manual sequencing = insert one stop at a time, in the desired
-order.** That was long the only known control — until the **load import (§10.1)** was cracked:
-one call now creates or rebuilds a whole load in an exact chosen order. Prefer §10.1; keep
-one-at-a-time as the fallback for incremental single-stop appends.
+order.** That was long the only known control — until the **load import (§10.1)** was cracked
+as the ORDER lever. The division of labor today (the **two-lever engine**): **membership** =
+`insertStops`/`removeStops` (real records; bulk insert is fine because the follow-up order
+import seats the sequence), **order** = the §10.1 import with full-echo entries.
 
-### 10.1 BATCH ordering — `load/update/{serviceName}/{cc}` (verified live, Jul 1 2026)
+### 10.1 BATCH ordering — `load/update/{serviceName}/{cc}`
 
-The async **load import** (`loadImport` op; serviceName `default` works) is the 1-call batch
-lever: `{ companyCode, loads: [{ loadHeader, stops: [...] }] }`. Verified against UAT DAVISV5:
+The async **load import** (`loadImport` op; serviceName `default` works):
+`{ companyCode, loads: [{ loadHeader, stops: [...] }] }`. First verified Jul 1 2026 against
+UAT DAVISV5; **matching semantics corrected Jul 2 2026** after the same-day prod incident
+(freight wipe + duplicate stops) was reproduced by controlled UAT experiments.
 
-- **The `stops[]` ARRAY ORDER is the visit order.** Two controlled conflict tests (array order
-  vs deliberately contradicting `stopSeq` numbers, with and without `stopSeqOrder: 1` in the
-  header) both seated the stops in ARRAY order — the `stopSeq` values and the `stopSeqOrder`
-  flag are ignored. The optimizer does NOT rearrange an imported load (anti-geographic zigzag
-  orders came back exactly as sent).
-- **Create-with-order:** a new `loadNbr` + full inline stop payloads lands as a load with
-  `to.seq` exactly matching the array. 1 call for N stops.
-- **Re-order in ONE call:** re-importing the SAME `loadNbr` with the stops permuted rebuilds
-  the load in the new order. The import is **declarative**: stops omitted from a re-import are
-  UNPLANNED from the load (the stop itself survives, unassigned) — one import = "this is the
-  load's complete stop list, in this order". A board Save = one import per touched load.
-- **Existing (already-created) stops** plan by reference: `stopNbr` + `stopType` + a `to`
-  block (address + schedule) suffices ("Either From or To information should be present" —
-  bare `stopNbr` refs are rejected). The stop's `from` side and other fields survive the
-  upsert (checked: origin address/schedule intact after a to-only import).
+**⚠️ THE MATCHING / REPLACE / CLONE SEMANTICS (UAT-proven Jul 2 2026 — this is the part the
+Jul 1 verification got wrong):**
+
+- **A `stops[]` entry MATCHES an existing stop ONLY when that `stopNbr` is already ON the
+  target load.** Matched = same `stopId`; the array order applies (reorders work).
+- **A MATCHED stop is FULL-REPLACED by its entry** — any field not sent is BLANKED. A
+  to-only entry (`stopNbr` + `stopType` + `to` block) wiped a live on-load record's
+  `totalPallets`/`totalCartons`/`weight`/`proNumber`/references (3 pallets/812 lb → null/null).
+- **An entry whose `stopNbr` is NOT on the target load NEVER matches — NuVizz CREATES A NEW
+  STOP RECORD (a CLONE) and plans the clone; the original is untouched.** Proven three ways:
+  an unplanned original (stopId `…3974`, freight intact) got a null-freight clone `…edb6`
+  planned instead; a cross-load "steal" made a THIRD record `…edbd` on the second load; and a
+  FULL payload for an existing off-load number STILL cloned (`…edc1` vs original `…3976`) —
+  data completeness does not change identity.
+- **REFUTED, do not rely on:** *"existing stops plan by reference (`stopNbr` + `to` block)"*
+  and *"the stop's `from` side and other fields survive the upsert"*. Both wrong. The Jul 1
+  runs only ever re-imported stops the import itself had created on that load (always the
+  matched case) and never compared `stopId`s — which is how the clone behavior slipped
+  through. ("Either From or To information should be present" is merely the entry's
+  VALIDATION rule, not a reference mechanism.)
+
+**What HELD from Jul 1 (still true, still verified):**
+
+- **The `stops[]` ARRAY ORDER is the visit order** for matched (on-load) entries — `stopSeq`
+  values and the `stopSeqOrder` flag are ignored; the optimizer does not rearrange an
+  imported load.
+- **Omission-unplan:** an ON-LOAD stop omitted from a re-import is UNPLANNED (the stop
+  record survives, unassigned).
+- **Create-with-order:** a NEW `loadNbr` + FULL inline stop payloads for numbers that exist
+  NOWHERE lands as a load with `to.seq` exactly matching the array — the created records are
+  complete when the payloads are (the clone in the full-payload experiment carried its
+  freight). Gate every number with a `getStop` 404 check first; a collision would clone.
 - **Header contract (the silent-failure trap):** the header MUST carry
   `earliestStartDttm`/`latestStartDttm` (NOT `scheduleStartDttm` — that's `load/edit` naming)
   **and the flat origin fields** (`origin`, `originName`, `originAddr1/2`, `originCity`,
@@ -310,6 +330,11 @@ lever: `{ companyCode, loads: [{ loadHeader, stops: [...] }] }`. Verified agains
 Live evidence (UAT): `SQTLOADC` — created in 1 call in order MAR→DUL→DEC→ROS, reversed in
 1 call to ROS→DEC→DUL→MAR, then re-imported without DUL (unplanned, stop preserved) as
 ROS→MAR→DEC. A control load + two lever-conflict loads were cancelled after verification.
+The Jul 2 refutation evidence: `SQTW901` (freight 2/4/645, stopId `…3974`) cloned onto
+`SQTLOADK` as `…edb6` (null freight) and onto `SQTLOADL` as `…edbd`; `SQTW902` (3/7/812,
+`…3976`) cloned onto `SQTLOADM` as `…edc1` even with a FULL payload; a to-only re-import of
+the on-load `…edc1` kept its stopId (matched) but nulled its freight. All three repro loads
+cancelled after the experiments.
 
 **Scale + injection test (Jul 1 2026, 9→10 real stops, load `SQTLOADH`, kept in UAT):**
 - 9 orders (real Davis consignees, Dalton→Forest Park whipsaw order) created + imported in
@@ -325,10 +350,13 @@ ROS→MAR→DEC. A control load + two lever-conflict loads were cancelled after 
   after ~60–90 s → re-send the same import; if still stuck, send the array REVERSED, then
   the desired order (verified to unstick it). Never trust the 200 alone. **This recipe is
   what the app now runs**: `src/lib/loadImport.js` (pure builders/comparators/planner) +
-  `src/lib/loadImportEngine.js` (`applyLoadOrder` — read, echo, import, converge) behind
-  `usePlanning.sequenceLoad` and `usePlanning.commit`.
-- Injection therefore = 1 import (add, appends) + 1–2 reorder imports (seat it) — constant
-  calls, vs the anchor+remove+re-insert path's ~2N+1.
+  `src/lib/loadImportEngine.js` (`applyLoadOrder` — read, insert arrivals, full-echo
+  import, converge) behind `usePlanning.sequenceLoad` and `usePlanning.commit`.
+- Injection (post-Jul 2 semantics) = 1 `insertStops` (the REAL record joins the load; a
+  lone insert appends) + 1–2 order imports (seat it) — constant calls, vs the
+  anchor+remove+re-insert path's ~2N+1. (The Jul 1 note that a new stop "appends on its
+  first import" was the clone landing at the end — the position observation still holds,
+  the mechanism was a clone; never inject via the import.)
 
 > ⚠️ **Delivery windows do NOT set the order.** An earlier hypothesis — that NuVizz seats a
 > bulk insert by `to.schedule.timeFrom` — was a **measurement artifact** (the "confirming" tests
@@ -339,34 +367,47 @@ ROS→MAR→DEC. A control load + two lever-conflict loads were cancelled after 
 > the chosen sequence — they are NOT the ordering mechanism.
 
 **Setting a stop's window** (delivery-slot ETA): the 30-min sequence-aligned slots are the
-**driver-visible appointment only** and now ride **inside the import payload** (each stop
-reference's `to.schedule`, stamped by visit position) — the sequencing path makes **no separate
-per-stop window writes**. The old `setStopWindow` helper (a full `stop/sync/update` upsert per
-stop) is **retired**: a partial upsert blanks/replaces whatever it omits — it blanked the
-destination address, and even the "full" rebuild blanked freight fields (`proNumber`/`pallets`/
-`weight`) not carried on the order record. An import *reference* leaves the stop's other fields
-intact (§10.1), which eliminates that whole hazard class. The origin/pickup window must still sit
-**before** every delivery slot (NuVizz rejects `from > to`), so creates pin it to 06:00–07:00.
+**driver-visible appointment only** and ride **inside the import's full-echo entries** (each
+entry's `to.schedule`, stamped by visit position — the ONE field the echo deliberately
+rewrites) — the sequencing path makes **no separate per-stop window writes**. The old
+`setStopWindow` helper (a full `stop/sync/update` upsert per stop) is **retired**: a partial
+upsert blanks/replaces whatever it omits. ⚠️ The import has the SAME replace semantics for a
+matched stop (Jul 2 2026) — which is exactly why every entry must be a **full echo** of the
+just-read record; a partial "reference" entry reproduces the freight wipe on the import
+surface. The origin/pickup window must still sit **before** every delivery slot (NuVizz
+rejects `from > to`), so creates pin it to 06:00–07:00.
 
 **Re-sequencing an existing load** (`usePlanning.sequenceLoad` / the `commit` engine — the
-**LOAD IMPORT path**, `src/lib/loadImport.js` + `src/lib/loadImportEngine.js`):
+**TWO-LEVER engine**, `src/lib/loadImport.js` + `src/lib/loadImportEngine.js`):
 1. `load/info` once — the echo source for the header (trap fields) and every on-load stop's
-   `to` block. Stops not on the load (arrivals) are echoed from `stop/info` — **echo, never
-   invent**; a bare `stopNbr` reference is rejected.
-2. ONE declarative `load/update/default/{cc}` import with `stops[]` in the desired order
-   (array order = visit order). On-load stops omitted from a *reorder* request are PRESERVED
-   (appended in current order) — only the commit engine's explicit departures are omitted
-   (declarative unplan). Delivery-slot windows ride inside the payload.
-3. **Converge** (mandatory): poll `load/info` on the ~6/10/15/25s ladder (≤5 polls), comparing
+   FULL record.
+2. **MEMBERSHIP (never via import):** desired stops not on the load (arrivals) are planned
+   with ONE bulk `insertStops` on their real `stopId`s (`stop/info` resolves each id and
+   confirms the stop isn't still planned on another load — sources release first). Then
+   re-read `load/info` so the freshly-planned records become echo sources. A stop leaves a
+   load by being OMITTED from that load's own order import (survives, unplanned) or by
+   `removeStops`. **A stop not on the load must NEVER appear in import `stops[]`** — that
+   entry would CLONE a new stop record (the engine's `buildImportLoad` guard makes this
+   unrepresentable: every entry must be in the just-read on-load set).
+3. **ORDER:** ONE `load/update/default/{cc}` import with `stops[]` in the desired order
+   (array order = visit order), every entry a **FULL ECHO** of the just-read on-load record —
+   `stopType`, `shipmentType`, `stopExecution`, `sourceType`, `shipmentNbr`, `proNumber`,
+   `reference1/2/3`, `totalPallets`, `totalCartons`, `weight` (numbers stay numbers),
+   `weightUOM`, the whole `from` block (address + schedule) and `to` block — because a
+   matched stop is FULL-REPLACED and anything omitted is blanked. On-load stops omitted from
+   a *reorder* request are PRESERVED (appended in current order) — only the commit engine's
+   explicit departures are omitted (declarative unplan). Delivery-slot windows ride inside
+   the entries.
+4. **Converge** (mandatory): poll `load/info` on the ~6/10/15/25s ladder (≤5 polls), comparing
    the read-back delivery order (sorted by `to.seq`, stopNbrs normalized: trim/uppercase/strip
    leading zeros, and only when every delivery has a real `to.seq`) to the requested array.
    Not converged → re-send the SAME import once; still stuck → send the array REVERSED, one
    beat, then the desired order (verified unstick). `ok` comes ONLY from the read-back; a 404
    while a new load is being created is not-yet-converged, not failure.
-4. If the requested state would leave the load EMPTY → **`load/cancel`**, never an empty
+5. If the requested state would leave the load EMPTY → **`load/cancel`**, never an empty
    `stops[]` import (and never remove-all, which cancelled the route as a side effect).
-5. Cost: 1 read + 1 import + ~1 poll when the worker is prompt — O(1) per load vs the anchor
-   method's ~2N+1.
+6. Cost: 1 read + 1 import + ~1 poll for a pure reorder (plus 1 `stop/info` + 1 insert + 1
+   re-read per arrival batch) — still O(1) imports per load vs the anchor method's ~2N+1.
 
 *(History/fallback — the ruled-out anchor method, the pre-import engine: keep the FIRST desired
 stop as an anchor because removing ALL stops cancels the route, `removeStops` the rest, then
@@ -379,14 +420,16 @@ one-at-a-time. On the import path, injection = 1 import (the add APPENDS on its 
 the resend that seats it — the convergence loop does this automatically.)*
 
 **Draft → Save (batch) pattern** (`usePlanning.commit`): stage all moves/reorders locally (zero
-calls), then commit — ONE declarative import per touched load: stop set + order become exactly
-that load's `stops[]`; departures are simply omitted (the stop record survives, unplanned).
-Cross-load moves run **sources before destinations** (import A *without* the stop first, then B
-*with* it — never rely on a declarative steal); `planCommitOrder` topologically sorts the batch
-and refuses a genuine cycle (a two-load swap — save it as two steps). A load the draft empties is
-retired via `load/cancel`, explicitly. Each load converges (read-back) before the next dependent
-load fires; a stuck source stops the batch. Cost is bounded by *loads touched* (reads + 1 import
-+ polls each), not by how many moves were dragged.
+calls), then commit per touched load with the two levers — arrivals join via `insertStops`
+(real records), departures are omitted from their source's own order import (the record
+survives, unplanned), then ONE full-echo order import seats the sequence. Cross-load moves run
+**sources before destinations** (release A first, then plan onto B — an import "steal" CLONES,
+and even `insertStops` on a still-planned stop is refused unless its source already converged
+in this batch, via `allowFromLoads`); `planCommitOrder` topologically sorts the batch and
+refuses a genuine cycle (a two-load swap — save it as two steps). A load the draft empties is
+retired via `load/cancel`, explicitly. Each load converges (read-back) before the next
+dependent load fires; a stuck source stops the batch. Cost is bounded by *loads touched*, not
+by how many moves were dragged.
 
 **`seqMode:'Manual'` does NOT give a cheaper path (tested, ruled out).** Exhaustively tested on
 **5 fresh empty loads** (`setSeqMode` op + the portal's own Manual toggle), both `STRICT` and
@@ -398,8 +441,8 @@ load fires; a stuck source stops the batch. Cost is bounded by *loads touched* (
 - Window constraint (`STRICT` vs `PREFERRED`) made **no difference** to either.
 
 Conclusion: **no load setting or window trick makes a bulk/single `insertStops` honor an order**
-on the clean Basic-auth API. The levers are the **load import (§10.1, batch)** and one-at-a-time
-insertion (incremental). The portal's
+on the clean Basic-auth API. The levers are exactly two: **membership via
+`insertStops`/`removeStops`** and **order via the §10.1 full-echo import**. The portal's
 drag-to-reorder / ETA ordering runs through its internal **session-gated** resequence endpoints
 (see below), which Basic auth can't reach — that's why ordering "works in the portal" but not here.
 
