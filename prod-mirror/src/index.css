@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+/* Stop iOS Safari from auto-inflating text ("text boosting"). Without this,
+   iOS renders our small fixed sizes (text-[10px] etc.) LARGER than designed,
+   which widens every row and clips the right edge on the map overlays, the
+   filter rows, the stop sheet, and the editor — overflow that does NOT
+   reproduce in desktop engines. Pin text scaling to 100%. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* Lock the app to the viewport — no page scroll or rubber-band bounce. Two
+   reasons: (1) a stray over-wide child can't push anchored controls (FAB,
+   right-aligned badges) off the right edge; (2) CRITICAL on iOS — `overflow-x:
+   hidden` alone computes overflow-y to `auto`, leaving the BODY scrollable, so
+   focusing the search field makes Safari scroll the whole app-shell up to reveal
+   it, blanking the screen. Hiding BOTH axes + fixing the body means only inner
+   containers (sheets, lists) scroll. */
+html, body, #root { width: 100%; max-width: 100%; overflow: hidden; overscroll-behavior: none; }
+body { position: fixed; inset: 0; font-family: system-ui, -apple-system, sans-serif; background: #f8fafc; color: #0f172a; }
+
+/* Google Maps InfoWindow restyling — match the brand */
+.gm-style .gm-style-iw-c { padding: 0 !important; }
+.gm-style .gm-style-iw-d { overflow: hidden !important; padding: 0 !important; }

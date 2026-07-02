@@ -1,0 +1,23 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+  [functions."nuvizz-pull-today-stops"]
+    timeout = 26
+  [functions."nuvizz-manual-scan"]
+    timeout = 26
+  # The write endpoint needs headroom for the LOAD IMPORT path (load read + per-stop reads +
+  # the import + its quick convergence check). The Netlify DEFAULT is 10s, which killed the
+  # first live import Save mid-flight before anything landed.
+  [functions."nuvizz-write"]
+    timeout = 26
+  [functions."motive-driver-positions"]
+    timeout = 10
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
