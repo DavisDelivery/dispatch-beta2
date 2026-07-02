@@ -5,25 +5,40 @@ import {
   sameOrder,
   parseLoadInfo,
   parseStopInfo,
+  parseStopLoadNbr,
   deliveryOrderFromInfo,
-  importRefFromRaw,
+  buildFullEchoStop,
   buildImportHeader,
   buildImportLoad,
   importAckOk,
   planCommitOrder,
 } from './loadImport.js'
+import { buildStopPayload } from './nuvizzWrite.js'
 
 // ---------------------------------------------------------------------------
 // Fixture builders (UAT-shaped; naming rule: no vendor/agent names anywhere)
 // ---------------------------------------------------------------------------
 
+// A raw on-load stop record as load/info returns it — WITH freight + references,
+// because the wipe class this module guards against is exactly those fields.
 const rawStop = (stopNbr: string, seq: number | null, over: any = {}) => ({
   stop: {
     stopId: `sid-${stopNbr}`,
     stopNbr,
     stopType: over.stopType || 'DO',
+    shipmentType: 'REG',
+    stopExecution: 'APP',
+    sourceType: 'INTG',
+    shipmentNbr: `PRO-${stopNbr}`,
+    proNumber: `PRO-${stopNbr}`,
+    reference1: `PRO PRO-${stopNbr}`,
+    reference2: 'CHAIRS AND DESKS x6',
+    totalPallets: over.pallets ?? 3,
+    totalCartons: over.cartons ?? 7,
+    weight: over.weight ?? 812,
+    weightUOM: 'LBS',
     from: {
-      address: { addressType: 'COM', name: 'ULINEUAT', addr1: '943 GAINESVILLE HWY', city: 'BUFORD', state: 'GA', zip: '30518', country: 'USA' },
+      address: { addressType: 'COM', name: 'ULINEUAT', addr1: '943 GAINESVILLE HWY', city: 'BUFORD', state: 'GA', zip: '30518', country: 'USA', latitude: 34.1, longitude: -83.9 },
       schedule: { timeFrom: '2026-07-15T06:00:00', timeTo: '2026-07-15T07:00:00', timeZone: 'America/New_York', timeConstraint: 'PREFERRED' },
     },
     to: {
@@ -32,6 +47,7 @@ const rawStop = (stopNbr: string, seq: number | null, over: any = {}) => ({
       schedule: { timeFrom: '2026-07-15T09:00:00', timeTo: '2026-07-15T09:30:00', timeZone: 'America/New_York', timeConstraint: 'PREFERRED' },
       ...over.to,
     },
+    ...over.stop,
   },
 })
 
@@ -46,6 +62,10 @@ const loadInfoResp = (stops: any[], header: any = HEADER) => ({
   status: 200,
   data: { Load: { loadHeader: header, versionId: 3, stops } },
 })
+
+// Convenience guards for buildImportLoad (the guard is MANDATORY).
+const onLoadGuard = (...nbrs: string[]) => ({ onLoad: new Set(nbrs.map(normStopNbr)) })
+const createGuard = (...nbrs: string[]) => ({ create: true, verifiedAbsent: new Set(nbrs.map(normStopNbr)) })
 
 // ---------------------------------------------------------------------------
 // normStopNbr + sameOrder — the convergence comparator normalization
@@ -68,13 +88,21 @@ test('sameOrder: padding/case/typing mismatches never read as not-converged', ()
 })
 
 // ---------------------------------------------------------------------------
-// parseLoadInfo / deliveryOrderFromInfo — read-back side of the comparator
+// parseLoadInfo / parseStopInfo / deliveryOrderFromInfo — read-back side
 // ---------------------------------------------------------------------------
 
 test('parseLoadInfo: 404 / missing header reads as not-found (pending), never a throw', () => {
   assert.equal(parseLoadInfo({ status: 404, data: { error: 'Not Found' } }).found, false)
   assert.equal(parseLoadInfo({ status: 200, data: {} }).found, false)
   assert.equal(parseLoadInfo(loadInfoResp([rawStop('A', 2)])).found, true)
+})
+
+test('parseStopInfo + parseStopLoadNbr: the stop record and its current load', () => {
+  const resp = { status: 200, data: { Stop: { stop: rawStop('Z', 5).stop, load: { loadNbr: 'SQTLOAD9', routeName: 'R9' } } } }
+  assert.equal(parseStopInfo(resp)!.stopNbr, 'Z')
+  assert.equal(parseStopLoadNbr(resp), 'SQTLOAD9')
+  assert.equal(parseStopInfo({ status: 404, data: {} }), null)
+  assert.equal(parseStopLoadNbr({ status: 200, data: { Stop: { stop: rawStop('Z', 5).stop } } }), null) // unplanned
 })
 
 test('deliveryOrderFromInfo: sorts by to.seq and excludes pickups', () => {
@@ -95,33 +123,60 @@ test('deliveryOrderFromInfo: a missing to.seq flags seqsComplete=false (mid-rebu
 })
 
 // ---------------------------------------------------------------------------
-// importRefFromRaw — echo the "to" block, stamp the slot window by position
+// buildFullEchoStop — a matched stop is FULL-REPLACED, so echo EVERYTHING
 // ---------------------------------------------------------------------------
 
-test('importRefFromRaw: echoes the address from the read (whitelisted, normalized), never invents', () => {
-  const ref = importRefFromRaw(rawStop('007139395', 2), 0)
-  assert.equal(ref.stopNbr, '007139395') // raw form kept for the wire
-  assert.equal(ref.stopType, 'DO')
-  assert.equal(ref.to.address.name, 'CONSIGNEE 007139395')
-  assert.equal(ref.to.address.addr1, '2 MAIN ST')
-  assert.equal(ref.to.address.state, 'GA') // GEORGIA normalized
-  assert.equal(ref.to.address.country, 'USA') // UNITED STATES normalized
-  assert.equal(ref.to.address.latitude, undefined) // junk fields never echoed
-  assert.equal((ref.to.address as any).seq, undefined)
+test('full echo: carries freight + references + PRO (the fields the wipe blanked), numbers as numbers', () => {
+  const e = buildFullEchoStop(rawStop('007139395', 2), 0)
+  assert.equal(e.stopNbr, '007139395')
+  assert.equal(e.stopType, 'DO')
+  assert.equal(e.shipmentType, 'REG')
+  assert.equal(e.stopExecution, 'APP')
+  assert.equal(e.sourceType, 'INTG')
+  assert.equal(e.shipmentNbr, 'PRO-007139395')
+  assert.equal(e.proNumber, 'PRO-007139395')
+  assert.equal(e.reference1, 'PRO PRO-007139395')
+  assert.equal(e.reference2, 'CHAIRS AND DESKS x6')
+  assert.equal(e.totalPallets, 3) // NUMBER, not string
+  assert.equal(e.totalCartons, 7)
+  assert.equal(e.weight, 812)
+  assert.equal(e.weightUOM, 'LBS')
+  assert.equal(typeof e.totalPallets, 'number')
+  assert.equal(typeof e.weight, 'number')
 })
 
-test('importRefFromRaw: delivery window = the 30-min slot for the visit index, on the stop’s own date', () => {
-  const r0 = importRefFromRaw(rawStop('A', 2), 0)
-  const r3 = importRefFromRaw(rawStop('B', 3), 3)
-  assert.equal(r0.to.schedule.timeFrom, '2026-07-15T08:00:00')
-  assert.equal(r0.to.schedule.timeTo, '2026-07-15T08:30:00')
-  assert.equal(r3.to.schedule.timeFrom, '2026-07-15T09:30:00')
-  assert.equal(r3.to.schedule.timeConstraint, 'PREFERRED')
+test('full echo: numeric-string freight is coerced to numbers; objects are refused (never echoed)', () => {
+  const e = buildFullEchoStop(rawStop('A', 2, { stop: { totalPallets: '4', weight: { v: 9 }, totalCartons: null } }), 0)
+  assert.equal(e.totalPallets, 4)
+  assert.equal(typeof e.totalPallets, 'number')
+  assert.equal(e.weight, undefined) // object refused
+  assert.equal(e.totalCartons, undefined) // null omitted (already blank on the record)
 })
 
-test('importRefFromRaw: refuses a record without an echoable address (bare refs are rejected upstream)', () => {
-  assert.equal(importRefFromRaw({ stop: { stopNbr: 'A', to: { address: {} } } }, 0), null)
-  assert.equal(importRefFromRaw({ stop: { to: { address: { addr1: '1 St' } } } }, 0), null)
+test('full echo: carries BOTH from and to blocks (addresses whitelisted + normalized, junk dropped)', () => {
+  const e = buildFullEchoStop(rawStop('A', 2), 0)
+  assert.equal(e.from.address.name, 'ULINEUAT')
+  assert.equal(e.from.address.addr1, '943 GAINESVILLE HWY')
+  assert.equal(e.from.schedule.timeFrom, '2026-07-15T06:00:00') // pickup schedule echoed verbatim
+  assert.equal(e.to.address.name, 'CONSIGNEE A')
+  assert.equal(e.to.address.state, 'GA') // GEORGIA normalized
+  assert.equal(e.to.address.country, 'USA') // UNITED STATES normalized
+  assert.equal(e.to.address.latitude, undefined) // junk fields never echoed
+  assert.equal((e.from.address as any).latitude, undefined)
+})
+
+test('full echo: to.schedule is the ONE rewritten field — the slot for the visit index', () => {
+  const e0 = buildFullEchoStop(rawStop('A', 2), 0)
+  const e3 = buildFullEchoStop(rawStop('B', 3), 3)
+  assert.equal(e0.to.schedule.timeFrom, '2026-07-15T08:00:00')
+  assert.equal(e0.to.schedule.timeTo, '2026-07-15T08:30:00')
+  assert.equal(e3.to.schedule.timeFrom, '2026-07-15T09:30:00')
+})
+
+test('full echo: refuses a record it cannot echo safely (missing from/to address)', () => {
+  assert.equal(buildFullEchoStop({ stop: { stopNbr: 'A', to: { address: { addr1: '1 St' } } } }, 0), null) // no from
+  assert.equal(buildFullEchoStop({ stop: { stopNbr: 'A', from: { address: { addr1: 'W' } }, to: { address: {} } } }, 0), null) // no to.addr1
+  assert.equal(buildFullEchoStop({ stop: { to: { address: { addr1: '1 St' } } } }, 0), null) // no stopNbr
 })
 
 // ---------------------------------------------------------------------------
@@ -139,9 +194,12 @@ test('buildImportHeader: carries earliest/latest + ALL flat origin fields', () =
   assert.equal((h as any).scheduleStartDttm, undefined) // load/edit naming never leaks in
 })
 
-test('buildImportHeader: falls back to a stop’s from-address when the header has no flat origin', () => {
-  const bare = { loadNbr: 'SQTLOAD2', earliestStartDttm: '2026-07-15T06:00:00', latestStartDttm: '2026-07-15T18:00:00', rtOrigin: 'WHSE' }
+test('buildImportHeader: falls back to a stop’s from-address (the live UAT header has NO flat origin)', () => {
+  // Real load/info headers carry origin:'WHSE' (string) + rtOrigin (an OBJECT) and
+  // no flat originName/originAddr1 — the ladder must echo the stop's from side.
+  const bare = { loadNbr: 'SQTLOAD2', earliestStartDttm: '2026-07-15T06:00:00', latestStartDttm: '2026-07-15T18:00:00', origin: 'WHSE', rtOrigin: { address: { addr1: 'X' } } }
   const h = buildImportHeader(bare, [rawStop('A', 2)])
+  assert.equal(h.origin, 'WHSE') // the string code, never the rtOrigin object
   assert.equal(h.originName, 'ULINEUAT')
   assert.equal(h.originAddr1, '943 GAINESVILLE HWY')
   assert.equal(h.originZip, '30518')
@@ -153,49 +211,64 @@ test('buildImportHeader: refuses epoch/millis dates (echo only ISO), derives the
   assert.equal(h.latestStartDttm, '2026-07-15T18:00:00')
 })
 
-test('buildImportHeader: an OBJECT under origin is never echoed (string coercion guard)', () => {
-  const messy = { ...HEADER, origin: { addr1: 'X' } as any, rtOrigin: 'DEPOT7' }
-  const h = buildImportHeader(messy, [])
-  assert.equal(h.origin, 'DEPOT7') // fell through to rtOrigin, not the object
-})
-
 test('buildImportHeader: throws when no date is derivable anywhere', () => {
   assert.throws(() => buildImportHeader({ loadNbr: 'SQTLOAD4' }, []), /no earliest\/latest/)
 })
 
 // ---------------------------------------------------------------------------
-// buildImportLoad — payload validation (the trap + safety rails)
+// buildImportLoad — the STRUCTURAL clone/wipe guard (mandatory)
 // ---------------------------------------------------------------------------
 
-const okStops = [importRefFromRaw(rawStop('A', 2), 0), importRefFromRaw(rawStop('B', 3), 1)]
+const okStops = () => [buildFullEchoStop(rawStop('A', 2), 0), buildFullEchoStop(rawStop('B', 3), 1)]
 
-test('buildImportLoad: a valid header + refs assembles the load', () => {
-  const L = buildImportLoad(buildImportHeader(HEADER, []), okStops.slice())
-  assert.equal(L.loadHeader.loadNbr, 'SQTLOAD1')
+test('order mode: on-load full echoes assemble; the guard is satisfied', () => {
+  const L = buildImportLoad(buildImportHeader(HEADER, []), okStops(), onLoadGuard('A', 'B'))
   assert.deepEqual(L.stops.map((s: any) => s.stopNbr), ['A', 'B'])
 })
 
-test('buildImportLoad: refuses an EMPTY stops[] (use load/cancel to retire a load)', () => {
-  assert.throws(() => buildImportLoad(buildImportHeader(HEADER, []), []), /load\/cancel/)
+test('guard is MANDATORY: an unguarded import cannot be built at all', () => {
+  assert.throws(() => (buildImportLoad as any)(buildImportHeader(HEADER, []), okStops()), /membership guard is required/)
 })
 
-test('buildImportLoad: refuses a bare stopNbr reference (no "to" block)', () => {
-  assert.throws(() => buildImportLoad(buildImportHeader(HEADER, []), [{ stopNbr: 'A' }]), /"to" block/)
+test('order mode: an OFF-LOAD entry is unrepresentable (it would CLONE a new stop record)', () => {
+  assert.throws(
+    () => buildImportLoad(buildImportHeader(HEADER, []), okStops(), onLoadGuard('A')), // B not on the load
+    /CLONE/,
+  )
 })
 
-test('buildImportLoad: refuses missing trap fields', () => {
+test('a to-only entry (no from block) is impossible to emit — it would FULL-REPLACE and blank freight', () => {
+  const toOnly = { stopNbr: 'A', stopType: 'DO', to: { address: { addr1: '1 MAIN ST' }, schedule: {} } }
+  assert.throws(() => buildImportLoad(buildImportHeader(HEADER, []), [toOnly], onLoadGuard('A')), /no "from" block/)
+})
+
+test('create mode: full payloads for verified-absent numbers assemble; a collision is refused', () => {
+  const p = buildStopPayload({ name: 'C1', addr1: '1 St', city: 'ATLANTA', state: 'GA', zip: '30303', stopNbr: 'SQTNEW1', pallets: '2', _index: 0 }, { serviceDate: '2026-07-15' })
+  const L = buildImportLoad(buildImportHeader({ ...HEADER, loadNbr: 'SQTLOADNEW' }, []), [p], createGuard('SQTNEW1'))
+  assert.equal(L.stops[0].stopNbr, 'SQTNEW1')
+  assert.throws(
+    () => buildImportLoad(buildImportHeader({ ...HEADER, loadNbr: 'SQTLOADNEW' }, []), [p], createGuard('SQTOTHER')),
+    /not verified absent/,
+  )
+})
+
+test('refuses an EMPTY stops[] (use load/cancel to retire a load)', () => {
+  assert.throws(() => buildImportLoad(buildImportHeader(HEADER, []), [], onLoadGuard('A')), /load\/cancel/)
+})
+
+test('refuses missing trap fields', () => {
   const h: any = { ...buildImportHeader(HEADER, []) }
   delete h.originZip
-  assert.throws(() => buildImportLoad(h, okStops.slice()), /originZip/)
+  assert.throws(() => buildImportLoad(h, okStops(), onLoadGuard('A', 'B')), /originZip/)
   const h2: any = { ...buildImportHeader(HEADER, []) }
   delete h2.earliestStartDttm
   h2.scheduleStartDttm = '2026-07-15T06:00:00'
-  assert.throws(() => buildImportLoad(h2, okStops.slice()), /scheduleStartDttm/)
+  assert.throws(() => buildImportLoad(h2, okStops(), onLoadGuard('A', 'B')), /scheduleStartDttm/)
 })
 
-test('buildImportLoad: refuses forbidden vendor/agent names in load/route names', () => {
+test('refuses forbidden vendor/agent names in load/route names', () => {
   const h: any = { ...buildImportHeader(HEADER, []), routeName: 'CLAUDE TEST ROUTE' }
-  assert.throws(() => buildImportLoad(h, okStops.slice()), /never contain/)
+  assert.throws(() => buildImportLoad(h, okStops(), onLoadGuard('A', 'B')), /never contain/)
 })
 
 // ---------------------------------------------------------------------------
@@ -217,7 +290,7 @@ test('importAckOk: rejects failure-flavored or reasoned bodies even on HTTP 200'
 // planCommitOrder — sources before destinations; cycles refused
 // ---------------------------------------------------------------------------
 
-test('planCommitOrder: a cross-load move imports the SOURCE before the DESTINATION', () => {
+test('planCommitOrder: a cross-load move releases the SOURCE before the DESTINATION plans it', () => {
   const ordered = planCommitOrder([
     { loadNbr: 'LOADB', desiredStopNbrs: ['S1', 'X'], dropStopNbrs: [], arrivalsFrom: ['LOADA'] },
     { loadNbr: 'LOADA', desiredStopNbrs: ['Y'], dropStopNbrs: ['S1'], arrivalsFrom: [] },
@@ -249,14 +322,4 @@ test('planCommitOrder: a two-load swap is a cycle and is refused', () => {
       ]),
     /cycle/,
   )
-})
-
-// ---------------------------------------------------------------------------
-// parseStopInfo — arrival echo source
-// ---------------------------------------------------------------------------
-
-test('parseStopInfo: unwraps Stop.stop and rejects a missing stop', () => {
-  const st = parseStopInfo({ status: 200, data: { Stop: { stop: rawStop('Z', 5).stop } } })
-  assert.equal(st.stopNbr, 'Z')
-  assert.equal(parseStopInfo({ status: 404, data: {} }), null)
 })

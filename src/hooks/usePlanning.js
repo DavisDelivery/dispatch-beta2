@@ -5,11 +5,13 @@
 // loadId resolution: from KNOWN_LOADS, else a cached one-time getLoad per load
 // number (localStorage dd_loadid_cache) so a load is read at most once, ever.
 //
-// SEQUENCING + Draft→Save run the LOAD IMPORT path (docs/NUVIZZ_API.md §10.1):
-// one declarative POST load/update per touched load + a mandatory convergence
-// read-back (src/lib/loadImportEngine.js). insertStops/removeStops remain for the
-// incremental plan/unplan actions (a SINGLE insert appends — the one-at-a-time
-// append is the fallback ordering control; a BULK insert gets geo-reoptimized).
+// SEQUENCING + Draft→Save run the TWO-LEVER engine (docs/NUVIZZ_API.md §10.1):
+// MEMBERSHIP via insertStops/removeStops (an import entry for an off-load stopNbr
+// CLONES a new stop record — proven Jul 2 2026), ORDER via one full-echo
+// load/update import per touched load + a mandatory convergence read-back
+// (src/lib/loadImportEngine.js). insertStops also remains the incremental
+// plan action (a SINGLE insert appends; a BULK insert gets geo-reoptimized —
+// the follow-up order import seats the sequence either way).
 
 import { useCallback, useState } from 'react'
 import { getLoad, insertStops, removeStops, assignDriver, dispatchLoad as apiDispatchLoad, assignOk, normalizeLoad, summarize } from '../lib/nuvizzWrite.js'
@@ -171,17 +173,18 @@ export function usePlanning() {
     }
   }, [resolveLoadId])
 
-  // Set a load's stop order in NuVizz to exactly `orderedStopNbrs` — the LOAD
-  // IMPORT path (docs/NUVIZZ_API.md §10.1): ONE declarative POST load/update sets
-  // the load's complete stop list in exact stops[] array order, then the engine
-  // polls load/info until the read-back order matches (never trust the async 200
-  // ack). The sequence-aligned 30-min delivery slots (the driver-visible
-  // appointment, NOT the ordering lever) ride INSIDE the import payload — no
-  // separate per-stop window writes. On-load stops omitted from `orderedStopNbrs`
-  // are PRESERVED (appended in their current order): a reorder never unplans.
-  // (The old anchor method — keep-first + removeStops + one-at-a-time re-insert —
-  // is retired from this path; single-insert append remains available via
-  // insertStops for incremental adds. See §10.1 for the history.)
+  // Set a load's stop order in NuVizz to exactly `orderedStopNbrs` — the TWO-LEVER
+  // engine (docs/NUVIZZ_API.md §10.1, real matching semantics UAT-proven Jul 2 2026):
+  // MEMBERSHIP via insertStops (an off-load stopNbr in an import CLONES a new stop
+  // record — never matches), ORDER via ONE import whose every entry is a FULL ECHO
+  // of the just-read on-load record (a matched stop is FULL-REPLACED; a partial
+  // entry blanks freight/PRO/references). The engine polls load/info until the
+  // read-back order matches (never trust the async 200 ack). The sequence-aligned
+  // 30-min delivery slots (the driver-visible appointment, NOT the ordering lever)
+  // ride inside the echo — no separate per-stop window writes. On-load stops
+  // omitted from `orderedStopNbrs` are PRESERVED (appended in their current
+  // order): a reorder never unplans. (The old anchor method — keep-first +
+  // removeStops + one-at-a-time re-insert — is retired from this path; see §10.1.)
   const sequenceLoad = useCallback(
     async (loadNbr, orderedStopNbrs) => {
       const wanted = [...new Set((orderedStopNbrs || []).map((sn) => String(sn)).filter(Boolean))]
@@ -198,20 +201,22 @@ export function usePlanning() {
   )
 
   // Commit a whole desired board arrangement to NuVizz in one pass (draft → Save) —
-  // the LOAD IMPORT path (docs/NUVIZZ_API.md §10.1). `desiredByLoad` is an array of
+  // the TWO-LEVER engine (docs/NUVIZZ_API.md §10.1). `desiredByLoad` is an array of
   // [loadNbr, orderedOrders[]]; any planned order not present in it is treated as
   // moved to Unassigned.
   //
-  // ONE declarative import per touched load: stop set + order become exactly the
-  // stops[] array; departures are simply OMITTED (declarative unplan — the stop
-  // record survives). Cross-load moves run SOURCES BEFORE DESTINATIONS (import A
-  // without the stop first, then B with it — never rely on a declarative steal);
-  // planCommitOrder topologically sorts the batch and refuses a genuine cycle
-  // (a two-load swap — save it as two steps). A load the draft EMPTIES is retired
-  // via load/cancel, explicitly — an empty stops[] import is never sent, and the
-  // old remove-all path (which cancelled the route as a side effect) is gone.
-  // Convergence is mandatory per load: ok comes only from a read-back whose order
-  // matches; a stuck source stops the batch (later loads may depend on its unplans).
+  // Per touched load: MEMBERSHIP first (arrivals planned by insertStops on their
+  // real stopIds — an import entry for an off-load stopNbr would CLONE a new stop
+  // record, proven Jul 2 2026), then ONE full-echo ORDER import; departures are
+  // OMITTED from their source's own import (the record survives, unplanned).
+  // Cross-load moves run SOURCES BEFORE DESTINATIONS: planCommitOrder topologically
+  // sorts the batch (a two-load swap cycle is refused — save it as two steps), and
+  // each converged source is passed to later loads via allowFromLoads so a stale
+  // stop/info pointer never blocks the destination's insert. A load the draft
+  // EMPTIES is retired via load/cancel, explicitly — an empty stops[] import is
+  // never sent, and the old remove-all path (which cancelled the route as a side
+  // effect) is gone. Convergence is mandatory per load: ok comes only from a
+  // read-back whose order matches; a stuck source stops the batch.
   const commit = useCallback(
     async (desiredByLoad) => {
       // Departures: every order whose current load ≠ its desired load.
@@ -256,15 +261,22 @@ export function usePlanning() {
 
       const errors = []
       let calls = 0
+      const releasedSources = [] // converged loads whose read-backs proved their departures left
       for (const entry of ordered) {
-        const r = await applyLoadOrder({ loadNbr: entry.loadNbr, desiredStopNbrs: entry.desiredStopNbrs, dropStopNbrs: entry.dropStopNbrs })
+        const r = await applyLoadOrder({
+          loadNbr: entry.loadNbr,
+          desiredStopNbrs: entry.desiredStopNbrs,
+          dropStopNbrs: entry.dropStopNbrs,
+          allowFromLoads: releasedSources,
+        })
         calls += r.calls || 0
         if (!r.ok) {
           // Sources before destinations: a stuck source must not let a destination
-          // "steal" a still-planned stop — stop the batch here.
+          // plan a still-planned stop — stop the batch here.
           errors.push(`${entry.loadNbr}: ${r.message}`)
           break
         }
+        releasedSources.push(entry.loadNbr)
         if (entry.dropStopNbrs.length) setPlanned(entry.dropStopNbrs, null)
         if (entry.desiredStopNbrs.length) {
           setPlanned(entry.desiredStopNbrs, entry.loadNbr)

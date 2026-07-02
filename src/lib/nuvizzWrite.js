@@ -171,11 +171,12 @@ export function buildStopPayload(row, s) {
 
 // NOTE: the old `setStopWindow` helper (a full stop/sync/update upsert that
 // re-stamped a stop's delivery slot) was REMOVED with the §10.1 import migration:
-// delivery windows now ride INSIDE the load-import payload (see lib/loadImport.js
-// importRefFromRaw), so the sequencing path makes no separate per-stop window
-// writes. That also retires the field-blanking hazard — the upsert replaced the
-// whole stop, so omitting proNumber/pallets/weight BLANKED them; an import
-// reference leaves the stop's other fields intact.
+// delivery windows now ride INSIDE the load-import entries (see lib/loadImport.js
+// buildFullEchoStop), so the sequencing path makes no separate per-stop window
+// writes. The field-blanking hazard is the same on BOTH surfaces — stop/sync/update
+// replaces the whole stop, and a MATCHED import entry FULL-REPLACES the on-load
+// record (UAT-proven Jul 2 2026) — which is exactly why every import entry is a
+// FULL ECHO of the just-read record, never a partial "reference".
 
 // Pull a friendly success/error summary out of the upstream NuVizz response.
 export function summarize(resp) {
@@ -207,10 +208,13 @@ export const removeStops = (creds, loadNbr, removeStopIds) =>
 export const assignDriver = (creds, loadId, driverId) =>
   call('assignDriver', creds, { loadId, driverId })
 export const dispatchLoad = (creds, loadId) => call('dispatchLoad', creds, { loadId })
-// The async LOAD IMPORT (§10.1) — one POST load/update/default/{cc} per touched
-// load sets its complete stop list in exact stops[] array order. The 200 ack is
-// async ("Async import is SUCCESS") and does NOT mean it landed — callers MUST run
-// the convergence read-back (see src/lib/loadImportEngine.js).
+// The async LOAD IMPORT (§10.1) — the ORDER lever ONLY. An entry matches a stop
+// solely when that stopNbr is already ON the load (off-load entries CLONE new stop
+// records; matched entries FULL-REPLACE the record — UAT-proven Jul 2 2026), so
+// membership changes go through insertStops/removeStops and every entry must be a
+// full echo (lib/loadImport.js buildFullEchoStop; buildImportLoad enforces it).
+// The 200 ack is async ("Async import is SUCCESS") and does NOT mean it landed —
+// callers MUST run the convergence read-back (see src/lib/loadImportEngine.js).
 export const importLoads = (creds, loads, serviceName) =>
   call('loadImport', creds, { loads, ...(serviceName ? { serviceName } : {}) })
 // Cancel (retire) a load cleanly — the ONLY sanctioned way to empty one (an empty
