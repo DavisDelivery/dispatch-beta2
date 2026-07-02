@@ -1,0 +1,56 @@
+[
+  {
+    "_case": "plain pallets, no line items",
+    "stopNbr": "G-001",
+    "cartons": 4,
+    "weight": 1450,
+    "weightUOM": "LB",
+    "stopDetails": [],
+    "signalSources": { "orderInstructions": null },
+    "addr2": null
+  },
+  {
+    "_case": "oversize via productCategory L + structured length",
+    "stopNbr": "G-002",
+    "cartons": 2,
+    "weight": 2000,
+    "weightUOM": "LB",
+    "stopDetails": [
+      { "product": "Steel rack section", "sku": "RACK-12", "quantity": 3, "quantityUOM": "EA", "weight": 600, "weightUOM": "LB", "productCategory": "L", "length": 144, "lengthUOM": "IN", "criticalDimension": 144, "criticalDimensionUOM": "IN" }
+    ],
+    "signalSources": { "orderInstructions": null }
+  },
+  {
+    "_case": "weight in KG converts to lbs; standard category",
+    "stopNbr": "G-003",
+    "cartons": 1,
+    "weight": null,
+    "stopDetails": [
+      { "product": "Boxed widgets", "sku": "WID-1", "quantity": 1, "quantityUOM": "PLT", "weight": 100, "weightUOM": "KG", "productCategory": "S" }
+    ],
+    "signalSources": { "orderInstructions": null }
+  },
+  {
+    "_case": "ambiguous: free-text mentions racking, no structured length",
+    "stopNbr": "G-004",
+    "cartons": 1,
+    "weight": 500,
+    "weightUOM": "LB",
+    "stopDetails": [
+      { "product": "Assorted hardware", "sku": "HW-9", "quantity": 1, "quantityUOM": "PLT", "weight": 500, "weightUOM": "LB", "productCategory": "S" }
+    ],
+    "signalSources": { "orderInstructions": "SPL-INSTR-TEXT: includes 10ft racking uprights, handle with care" }
+  },
+  {
+    "_case": "skids summed from pallet-UOM lines when totalPallets missing",
+    "stopNbr": "G-005",
+    "cartons": null,
+    "weight": 800,
+    "weightUOM": "LB",
+    "stopDetails": [
+      { "product": "Pallet A", "sku": "PA", "quantity": 2, "quantityUOM": "PALLETS", "weight": 400, "weightUOM": "LB", "productCategory": "S" },
+      { "product": "Pallet B", "sku": "PB", "quantity": 1, "quantityUOM": "PLT", "weight": 400, "weightUOM": "LB", "productCategory": "S" }
+    ],
+    "signalSources": { "orderInstructions": null }
+  }
+]

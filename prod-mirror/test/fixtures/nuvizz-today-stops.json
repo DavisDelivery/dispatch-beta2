@@ -1,0 +1,555 @@
+{
+  "_note": "Mock NuVizz /stop/info/customer/{cc} response. Used by nuvizz-pull-today-stops.mts when ?mock=1 OR when NUVIZZ_DAVIS_USER/_PASS env vars are missing. Shape matches the v7 OpenAPI envelope (top-level 'stops' array), with each entry having stop/stopExecutionInfo/load sub-objects \u2014 same as the live response. Ten stops in/around Buford GA so the map has something to render.",
+  "stops": [
+    {
+      "stop": {
+        "stopNbr": "ST-1001",
+        "stopType": "DO",
+        "stopSeq": 1,
+        "proNumber": "7100001",
+        "totalPallets": 4,
+        "totalCartons": 28,
+        "weight": 1450,
+        "weightUOM": "LB",
+        "accountNumber": "C-50012",
+        "custInfo": {
+          "custName": "Lakeside Cabinetry LLC",
+          "custAccNbr": "C-50012"
+        },
+        "to": {
+          "address": {
+            "name": "Lakeside Cabinetry LLC",
+            "addr1": "2310 Buford Hwy",
+            "addr2": "Suite B",
+            "city": "Buford",
+            "state": "GA",
+            "zip": "30518",
+            "latitude": 34.1226,
+            "longitude": -83.9821
+          },
+          "schedule": {
+            "timeFrom": "08:00",
+            "timeTo": "12:00"
+          },
+          "contact": {
+            "contactName": "Marcus",
+            "phone": "770-555-0188"
+          }
+        }
+      },
+      "stopExecutionInfo": {
+        "stopStatus": "30"
+      },
+      "load": {
+        "loadNbr": "DAVIS192901",
+        "driverName": "JIM PALLETTE"
+      }
+    },
+    {
+      "stop": {
+        "stopNbr": "ST-1002",
+        "stopType": "DO",
+        "stopSeq": 2,
+        "proNumber": "7100002",
+        "totalPallets": 1,
+        "totalCartons": 6,
+        "weight": 410,
+        "weightUOM": "LB",
+        "accountNumber": "C-50027",
+        "custInfo": {
+          "custName": "Northside Hospital Receiving",
+          "custAccNbr": "C-50027"
+        },
+        "to": {
+          "address": {
+            "name": "Northside Hospital Receiving",
+            "addr1": "1000 Johnson Ferry Rd NE",
+            "addr2": "Dock 3 - LIFTGATE REQ - 10am-2pm only",
+            "city": "Atlanta",
+            "state": "GA",
+            "zip": "30342",
+            "latitude": 33.9259,
+            "longitude": -84.3478
+          },
+          "schedule": {
+            "timeFrom": "10:00",
+            "timeTo": "14:00"
+          },
+          "contact": {
+            "contactName": "Loading Dock",
+            "phone": "404-851-8000"
+          }
+        }
+      },
+      "stopExecutionInfo": {
+        "stopStatus": "30"
+      },
+      "load": {
+        "loadNbr": "DAVIS192901",
+        "driverName": "JIM PALLETTE"
+      }
+    },
+    {
+      "stop": {
+        "stopNbr": "ST-1003",
+        "stopType": "DO",
+        "stopSeq": 3,
+        "proNumber": "7100003",
+        "totalPallets": 8,
+        "totalCartons": 0,
+        "weight": 4200,
+        "weightUOM": "LB",
+        "accountNumber": "C-50044",
+        "custInfo": {
+          "custName": "Gwinnett Steel Supply",
+          "custAccNbr": "C-50044"
+        },
+        "to": {
+          "address": {
+            "name": "Gwinnett Steel Supply",
+            "addr1": "4455 Industrial Pkwy",
+            "addr2": "NO TRACTOR TRAILER - 26ft max",
+            "city": "Lawrenceville",
+            "state": "GA",
+            "zip": "30043",
+            "latitude": 33.9562,
+            "longitude": -83.9879
+          },
+          "schedule": {
+            "timeFrom": "07:00",
+            "timeTo": "15:00"
+          },
+          "contact": {
+            "contactName": "Wendy",
+            "phone": "678-555-0211"
+          }
+        }
+      },
+      "stopExecutionInfo": {
+        "stopStatus": "30"
+      },
+      "load": {
+        "loadNbr": "DAVIS192902",
+        "driverName": "AARON MITCHELL"
+      }
+    },
+    {
+      "stop": {
+        "stopNbr": "ST-1004",
+        "stopType": "DO",
+        "stopSeq": 1,
+        "proNumber": "7100004",
+        "totalPallets": 2,
+        "totalCartons": 14,
+        "weight": 720,
+        "weightUOM": "LB",
+        "accountNumber": "C-50051",
+        "custInfo": {
+          "custName": "Buford Auto Body Inc",
+          "custAccNbr": "C-50051"
+        },
+        "to": {
+          "address": {
+            "name": "Buford Auto Body Inc",
+            "addr1": "1800 Mall of GA Blvd",
+            "addr2": "",
+            "city": "Buford",
+            "state": "GA",
+            "zip": "30519",
+            "latitude": 34.0796,
+            "longitude": -83.9942
+          },
+          "schedule": {
+            "timeFrom": "09:00",
+            "timeTo": "17:00"
+          },
+          "contact": {
+            "contactName": "Service Bay",
+            "phone": "770-555-0240"
+          }
+        }
+      },
+      "stopExecutionInfo": {
+        "stopStatus": "30"
+      },
+      "load": {
+        "loadNbr": "DAVIS192902",
+        "driverName": "AARON MITCHELL"
+      }
+    },
+    {
+      "stop": {
+        "stopNbr": "ST-1005",
+        "stopType": "DO",
+        "stopSeq": 4,
+        "proNumber": "7100005",
+        "totalPallets": 12,
+        "totalCartons": 0,
+        "weight": 9800,
+        "weightUOM": "LB",
+        "accountNumber": "C-50063",
+        "custInfo": {
+          "custName": "Atlanta Distribution Center",
+          "custAccNbr": "C-50063"
+        },
+        "to": {
+          "address": {
+            "name": "Atlanta Distribution Center",
+            "addr1": "5900 Fulton Industrial Blvd SW",
+            "addr2": "Appt Required - call ahead",
+            "city": "Atlanta",
+            "state": "GA",
+            "zip": "30336",
+            "latitude": 33.7426,
+            "longitude": -84.5481
+          },
+          "schedule": {
+            "timeFrom": "08:00",
+            "timeTo": "16:00"
+          },
+          "contact": {
+            "contactName": "Tony",
+            "phone": "404-555-0319"
+          }
+        }
+      },
+      "stopExecutionInfo": {
+        "stopStatus": "30"
+      },
+      "load": {
+        "loadNbr": "DAVIS192903",
+        "driverName": "VICTOR FERNANDEZ"
+      }
+    },
+    {
+      "stop": {
+        "stopNbr": "ST-1006",
+        "stopType": "DO",
+        "stopSeq": 1,
+        "proNumber": "7100006",
+        "totalPallets": 3,
+        "totalCartons": 19,
+        "weight": 1080,
+        "weightUOM": "LB",
+        "accountNumber": "C-50071",
+        "custInfo": {
+          "custName": "Mountain View Plumbing Co",
+          "custAccNbr": "C-50071"
+        },
+        "to": {
+          "address": {
+            "name": "Mountain View Plumbing Co",
+            "addr1": "742 Peachtree Industrial Blvd",
+            "addr2": "Ground dock only",
+            "city": "Suwanee",
+            "state": "GA",
+            "zip": "30024",
+            "latitude": 34.0515,
+            "longitude": -84.0713
+          },
+          "schedule": {
+            "timeFrom": "07:30",
+            "timeTo": "11:30"
+          },
+          "contact": {
+            "contactName": "Dave",
+            "phone": "678-555-0387"
+          }
+        }
+      },
+      "stopExecutionInfo": {
+        "stopStatus": "30"
+      },
+      "load": {
+        "loadNbr": "DAVIS192903",
+        "driverName": "VICTOR FERNANDEZ"
+      }
+    },
+    {
+      "stop": {
+        "stopNbr": "ST-1007",
+        "stopType": "DO",
+        "stopSeq": 2,
+        "proNumber": "7100007",
+        "totalPallets": 6,
+        "totalCartons": 42,
+        "weight": 2300,
+        "weightUOM": "LB",
+        "accountNumber": "C-50083",
+        "custInfo": {
+          "custName": "Cumming Outdoor Supply",
+          "custAccNbr": "C-50083"
+        },
+        "to": {
+          "address": {
+            "name": "Cumming Outdoor Supply",
+            "addr1": "525 Atlanta Hwy",
+            "addr2": "",
+            "city": "Cumming",
+            "state": "GA",
+            "zip": "30040",
+            "latitude": 34.207,
+            "longitude": -84.1402
+          },
+          "schedule": {
+            "timeFrom": "08:00",
+            "timeTo": "17:00"
+          },
+          "contact": {
+            "contactName": "Front Desk",
+            "phone": "770-555-0455"
+          }
+        }
+      },
+      "stopExecutionInfo": {
+        "stopStatus": "30"
+      },
+      "load": {
+        "loadNbr": "DAVIS192904",
+        "driverName": "GEORGE LEONARD"
+      }
+    },
+    {
+      "stop": {
+        "stopNbr": "ST-1008",
+        "stopType": "DO",
+        "stopSeq": 3,
+        "proNumber": "7100008",
+        "totalPallets": 1,
+        "totalCartons": 4,
+        "weight": 180,
+        "weightUOM": "LB",
+        "accountNumber": "C-50094",
+        "custInfo": {
+          "custName": "Sugar Hill Tile & Stone",
+          "custAccNbr": "C-50094"
+        },
+        "to": {
+          "address": {
+            "name": "Sugar Hill Tile & Stone",
+            "addr1": "4900 Suwanee Dam Rd",
+            "addr2": "Liftgate, ground level",
+            "city": "Sugar Hill",
+            "state": "GA",
+            "zip": "30518",
+            "latitude": 34.1062,
+            "longitude": -84.0335
+          },
+          "schedule": {
+            "timeFrom": "09:00",
+            "timeTo": "13:00"
+          },
+          "contact": {
+            "contactName": "Aaron",
+            "phone": "678-555-0501"
+          }
+        }
+      },
+      "stopExecutionInfo": {
+        "stopStatus": "30"
+      },
+      "load": {
+        "loadNbr": "DAVIS192904",
+        "driverName": "GEORGE LEONARD"
+      }
+    },
+    {
+      "stop": {
+        "stopNbr": "ST-1009",
+        "stopType": "DO",
+        "stopSeq": 5,
+        "proNumber": "7100009",
+        "totalPallets": 2,
+        "totalCartons": 11,
+        "weight": 660,
+        "weightUOM": "LB",
+        "accountNumber": "C-50100",
+        "custInfo": {
+          "custName": "Duluth Restaurant Equipment",
+          "custAccNbr": "C-50100"
+        },
+        "to": {
+          "address": {
+            "name": "Duluth Restaurant Equipment",
+            "addr1": "3055 Pleasant Hill Rd",
+            "addr2": "Suite 200 - rear receiving door",
+            "city": "Duluth",
+            "state": "GA",
+            "zip": "30096",
+            "latitude": 33.9942,
+            "longitude": -84.1305
+          },
+          "schedule": {
+            "timeFrom": "10:00",
+            "timeTo": "16:00"
+          },
+          "contact": {
+            "contactName": "Linda",
+            "phone": "770-555-0612"
+          }
+        }
+      },
+      "stopExecutionInfo": {
+        "stopStatus": "30"
+      },
+      "load": {
+        "loadNbr": "DAVIS192905",
+        "driverName": "BRETT SPRADLEY"
+      }
+    },
+    {
+      "stop": {
+        "stopNbr": "ST-1010",
+        "stopType": "DO",
+        "stopSeq": 1,
+        "proNumber": "7100010",
+        "totalPallets": 0,
+        "totalCartons": 3,
+        "weight": 75,
+        "weightUOM": "LB",
+        "accountNumber": "C-50115",
+        "custInfo": {
+          "custName": "Flowery Branch Public Works",
+          "custAccNbr": "C-50115"
+        },
+        "to": {
+          "address": {
+            "name": "Flowery Branch Public Works",
+            "addr1": "5410 Pine St",
+            "addr2": "",
+            "city": "Flowery Branch",
+            "state": "GA",
+            "zip": "30542",
+            "latitude": 34.1856,
+            "longitude": -83.9229
+          },
+          "schedule": {
+            "timeFrom": "08:00",
+            "timeTo": "15:00"
+          },
+          "contact": {
+            "contactName": "Stacy",
+            "phone": "770-555-0743"
+          }
+        }
+      },
+      "stopExecutionInfo": {
+        "stopStatus": "30"
+      },
+      "load": {
+        "loadNbr": "DAVIS192905",
+        "driverName": "BRETT SPRADLEY"
+      }
+    },
+    {
+      "stop": {
+        "stopNbr": "ST-7777",
+        "stopType": "DO",
+        "stopSeq": 1,
+        "proNumber": "7122698",
+        "totalPallets": 2,
+        "totalCartons": 12,
+        "weight": 880,
+        "weightUOM": "LB",
+        "accountNumber": "C-50301",
+        "custInfo": {
+          "custName": "Northbridge Industrial",
+          "custAccNbr": "C-50301"
+        },
+        "to": {
+          "address": {
+            "name": "Northbridge Industrial",
+            "addr1": "4150 Industrial Blvd",
+            "addr2": "Loading dock C - ring bell",
+            "city": "Suwanee",
+            "state": "GA",
+            "zip": "30024",
+            "latitude": 34.0651,
+            "longitude": -84.0712
+          },
+          "schedule": {
+            "timeFrom": "09:00",
+            "timeTo": "13:00"
+          }
+        },
+        "comments": [
+          {
+            "commentType": "01",
+            "cmtType": "ORD_IN",
+            "accessLevels": [
+              "DRIVER",
+              "DISPATCHER",
+              "CUSTOMER"
+            ],
+            "commentDescription": "SPL-INSTR-TEXT: STRAIGHT TRUCK ONLY",
+            "commentTypeDescription": "Order Instructions",
+            "addedByName": "INTG ULINE",
+            "addedOn": "2026-05-21T00:00:00",
+            "source": "Order - Order Instructions"
+          },
+          {
+            "commentType": "01",
+            "cmtType": "ORD_IN",
+            "accessLevels": [
+              "DRIVER",
+              "DISPATCHER",
+              "CUSTOMER"
+            ],
+            "commentDescription": "SPL-INSTR-TEXT: LIFT GATE NEEDED",
+            "commentTypeDescription": "Order Instructions",
+            "addedByName": "INTG ULINE",
+            "addedOn": "2026-05-21T00:00:00",
+            "source": "Order - Order Instructions"
+          }
+        ]
+      },
+      "stopExecutionInfo": {
+        "stopStatus": "30"
+      },
+      "load": {
+        "loadNbr": "DAVIS192901",
+        "driverName": "JIM PALLETTE"
+      }
+    },
+    {
+      "stop": {
+        "stopNbr": "ST-8888",
+        "stopType": "DO",
+        "stopSeq": 2,
+        "proNumber": "7122699",
+        "totalPallets": 1,
+        "totalCartons": 4,
+        "weight": 220,
+        "weightUOM": "LB",
+        "accountNumber": "C-50302",
+        "custInfo": {
+          "custName": "Buford Welding Supply",
+          "custAccNbr": "C-50302"
+        },
+        "to": {
+          "address": {
+            "name": "Buford Welding Supply",
+            "addr1": "920 Buford Industrial Way",
+            "addr2": "NO TRACTOR TRL - 26ft max - call ahead",
+            "city": "Buford",
+            "state": "GA",
+            "zip": "30518",
+            "latitude": 34.1142,
+            "longitude": -83.9925
+          },
+          "schedule": {
+            "timeFrom": "10:00",
+            "timeTo": "14:00"
+          }
+        }
+      },
+      "stopExecutionInfo": {
+        "stopStatus": "30"
+      },
+      "load": {
+        "loadNbr": "DAVIS192901",
+        "driverName": "JIM PALLETTE"
+      }
+    }
+  ]
+}
