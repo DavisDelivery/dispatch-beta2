@@ -23,6 +23,11 @@
 
 const DEFAULT_LOGIN_BASE = 'https://login.nuvizz.com'
 
+// Same call counter the openapi write fn uses — so login + RWB round-trips land in
+// the SAME `calls:<ET-day>` blob and the topbar pill reflects the true daily total.
+let counter = null
+try { counter = require('./lib/callCounter.cjs') } catch { /* best-effort */ }
+
 function json(statusCode, body) {
   return { statusCode, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' }, body: JSON.stringify(body) }
 }
@@ -47,6 +52,9 @@ const hostOf = (u) => new URL(u).host
 
 async function go(jar, method, url, { headers = {}, body } = {}) {
   const host = hostOf(url)
+  // Count every upstream RWB/login round-trip at this single chokepoint (best-effort,
+  // never blocks). Route label = the URL pathname so byRoute breaks login vs reorder out.
+  if (counter) { try { await counter.recordCall(new URL(url).pathname.replace(/^\//, '')) } catch { /* noop */ } }
   const cookie = jar.header(host)
   const res = await fetch(url, { method, redirect: 'manual', headers: { ...(cookie ? { cookie } : {}), ...headers }, body })
   jar.store(host, res)
