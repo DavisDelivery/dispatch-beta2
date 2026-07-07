@@ -24,6 +24,7 @@ import {
   type SingleOp, type WriteOp, type WriteCreds,
 } from './nuvizz-write-ops.mts';
 import { isHashLikeId } from './nuvizz-list.mts';
+import { rwbEngineBlocked, rwbSequenceStops } from './nuvizz-rwb.mts';
 
 const hasDriverId = (v: any) => v != null && String(v).trim() !== '' && Number(v) !== 0;
 
@@ -1118,14 +1119,218 @@ export async function runCommitBoardImport(requester: RequesterLike, payload: an
   return { ok: loads.every((l: any) => l.ok) && (legacyResult.orphaned || []).length === 0, loads, orphaned: legacyResult.orphaned || [] };
 }
 
+// Shared Buford depot — every DAVIS route runs from one warehouse, so this is the fallback
+// when a load's own rtOrigin carries no coordinates. (Matches the constant proven against
+// UAT in the RWB byte-integrity test, Jul 2026.)
+const DAVIS_DEPOT = { lat: 34.04446, lng: -83.71669 };
+
+/**
+ * runCommitBoardRwb — the SAME board Save (identical payload + result shape as
+ * runCommitBoard / runCommitBoardImport) executed through the Route Workbench engine
+ * (lib/nuvizz-rwb.mts). Reuses the import engine's proven MEMBERSHIP classification
+ * (arrivals resolved + steal-guarded via getStop, sources-before-destinations topo-sort)
+ * — the only thing that changes is LEVER 2 (ORDER): instead of a full-echo async load
+ * import + convergence poll, this fires the 2-call SYNCHRONOUS RWB sequence
+ * (fetchUpdatedJson + saveComparedRouteData), which references stops BY ID ONLY and so
+ * cannot blank or clone a stop's freight/address data. No `pending` state is ever
+ * returned — a Save either lands in-band or reports its error immediately.
+ *
+ * Loads without an order change (emptyLoad, driver/dispatch-only, pure removes) fall
+ * back to the UNCHANGED legacy engine, exactly like the import engine does.
+ */
+export async function runCommitBoardRwb(requester: RequesterLike, payload: any, creds: WriteCreds): Promise<any> {
+  if (rwbEngineBlocked()) {
+    return { ok: false, gated: true, error: 'RWB engine is disabled on the server (NUVIZZ_RWB_ENABLED must be explicitly set) — use the classic or import engine' };
+  }
+  const loadsIn: any[] = Array.isArray(payload?.loads) ? payload.loads : [];
+  if (!loadsIn.length) return { ok: true, loads: [], orphaned: [] };
+
+  const legacy: any[] = [];
+  const seq: any[] = []; // { L, loadNbr, load, orderedNbrs, arrivals, curNbrs, result, addReads }
+  const batchNbrs = new Set<string>();
+  for (const l of loadsIn) { const v = String(l?.loadNbr ?? '').trim(); if (v && !isHashLikeId(v)) batchNbrs.add(v); }
+
+  for (const L of loadsIn) {
+    const orderedNbrs: string[] | null = Array.isArray(L?.orderedStopNbrs) ? L.orderedStopNbrs.map((x: any) => String(x)).filter(Boolean) : null;
+    if (L?.emptyLoad === true || !orderedNbrs || orderedNbrs.length === 0) { legacy.push(L); continue; }
+    const result: any = { loadNbr: L?.loadNbr ?? null, ok: true, steps: [], error: null };
+
+    if (!L?.loadNbr && !L?.loadId) {
+      result.ok = false; result.error = 'commitBoard(rwb): loadNbr or loadId required';
+      seq.push({ L, loadNbr: null, orderedNbrs, arrivals: [], curNbrs: new Set(), result }); continue;
+    }
+    let loadNbrX = (L?.loadNbr != null && String(L.loadNbr).trim() !== '' && !isHashLikeId(String(L.loadNbr))) ? String(L.loadNbr) : null;
+    if (!loadNbrX && orderedNbrs[0]) loadNbrX = await resolveLoadNbrByStopNbr(requester, orderedNbrs[0], creds);
+    if (!loadNbrX && trustableLoadId(L?.loadId)) loadNbrX = await resolveLoadNbrById(requester, L.loadId, creds);
+    if (!loadNbrX && trustableLoadId(L?.loadId) && orderedNbrs[0]) {
+      const seed = await resolveLoadNbrBySeeding(requester, L.loadId, orderedNbrs[0], creds);
+      result.steps.push({ op: 'seedLoad', ok: !!seed.loadNbr, seeded: seed.seeded, loadNbr: seed.loadNbr, error: seed.error || null });
+      if (seed.loadNbr) { loadNbrX = seed.loadNbr; result.seededStopNbr = orderedNbrs[0]; result.seededLoadNbr = seed.loadNbr; }
+      else { result.ok = false; result.error = `commitBoard(rwb): ${seed.error || 'could not resolve the load number'}`; seq.push({ L, loadNbr: null, orderedNbrs, arrivals: [], curNbrs: new Set(), result }); continue; }
+    }
+    if (!loadNbrX) { legacy.push(L); continue; }   // e.g. loadId-only pure add — the legacy path still works
+    result.loadNbr = loadNbrX;
+
+    const f = await fetchLoad(requester, loadNbrX, creds);
+    if (!f.load) { result.ok = false; result.error = `commitBoard(rwb): load not found (${loadMissDiag(loadNbrX, f)})`; seq.push({ L, loadNbr: loadNbrX, orderedNbrs, arrivals: [], curNbrs: new Set(), result }); continue; }
+    const load = f.load;
+    if (L?.loadId && load.loadId && String(load.loadId) !== String(L.loadId)) {
+      result.ok = false; result.error = `commitBoard(rwb): load identity mismatch (name resolved ${load.loadId}, expected ${L.loadId})`;
+      seq.push({ L, loadNbr: loadNbrX, orderedNbrs, arrivals: [], curNbrs: new Set(), result }); continue;
+    }
+    if (hasUnmodeledDelivery(load)) {
+      result.ok = false; result.error = 'commitBoard(rwb): load has a non-DO stop in a delivery slot — reorder skipped (verify in portal)';
+      seq.push({ L, loadNbr: loadNbrX, orderedNbrs, arrivals: [], curNbrs: new Set(), result }); continue;
+    }
+    batchNbrs.add(loadNbrX);
+
+    const curNbrs = new Set<string>();
+    const stopIdByNbr = new Map<string, string>();
+    for (const s of (load.stops || [])) {
+      if (s?.stopNbr == null) continue;
+      curNbrs.add(String(s.stopNbr));
+      if (s?.stopId != null && String(s?.stopType ?? '').toUpperCase() === 'DO') stopIdByNbr.set(String(s.stopNbr), String(s.stopId));
+    }
+
+    // Same TWO-LEVER classification as the import engine: ON-LOAD (already have a stopId) vs
+    // ARRIVAL (an existing stop elsewhere — resolved + steal-guarded via getStop, planned with
+    // insertStops by stopId; NEVER an RWB entry for a stop not yet on this load).
+    const missing = orderedNbrs.filter((n) => !stopIdByNbr.has(n));
+    const fetched = new Map<string, any>(await Promise.all(missing.map(async (n): Promise<[string, any]> => {
+      try { return [n, await fireSingle(requester, 'getStop', { stopNbr: n }, creds)]; }
+      catch (e: any) { return [n, { ok: false, error: e?.message || 'getStop failed' }]; }
+    })));
+    const arrivals: Array<{ nbr: string; stopId: string; srcLoadNbr?: string }> = [];
+    let err: string | null = null;
+    for (const nbr of orderedNbrs) {
+      if (stopIdByNbr.has(nbr)) continue;
+      const gs = fetched.get(nbr);
+      const srcNbr = gs?.ok ? String(gs.stop?.assignedLoadNbr ?? '').trim() : '';
+      if (!gs?.ok || !gs.stop?.stopId) { err = `commitBoard(rwb): stop ${nbr} could not be read for planning (stale board — refresh and retry)`; break; }
+      if (srcNbr && srcNbr !== loadNbrX && !batchNbrs.has(srcNbr)) {
+        err = `commitBoard(rwb): stop ${nbr} is still planned on load ${srcNbr}, which is not part of this Save — open that load in Compare so the move is staged`; break;
+      }
+      arrivals.push({ nbr, stopId: String(gs.stop.stopId), srcLoadNbr: srcNbr && srcNbr !== loadNbrX ? srcNbr : undefined });
+    }
+    if (err) { result.ok = false; result.error = err; seq.push({ L, loadNbr: loadNbrX, orderedNbrs, arrivals: [], curNbrs, result }); continue; }
+    seq.push({ L, loadNbr: loadNbrX, load, orderedNbrs, arrivals, curNbrs, result, addReads: missing.length });
+  }
+
+  const legacyResult = legacy.length
+    ? await runCommitBoard(requester, { ...payload, loads: legacy }, creds)
+    : { ok: true, loads: [], orphaned: [] };
+
+  // sources-before-destinations — identical topo-sort to the import engine.
+  const live = seq.filter((p) => p.result.ok);
+  const ordered: any[] = [];
+  const pending = new Set(live);
+  const waitsOnQ = (p: any, q: any) => q !== p && p.arrivals.some((a: any) =>
+    (a.srcLoadNbr && String(q.loadNbr) === String(a.srcLoadNbr)) || q.curNbrs.has(a.nbr));
+  while (pending.size) {
+    let emitted = false;
+    for (const p of [...pending]) {
+      const waitsOn = [...pending].some((q) => waitsOnQ(p, q));
+      if (!waitsOn) { ordered.push(p); pending.delete(p); emitted = true; }
+    }
+    if (!emitted) {
+      for (const p of pending) { p.result.ok = false; p.result.error = 'commitBoard(rwb): circular cross-load move (a swap) — save it in two steps'; }
+      pending.clear();
+    }
+  }
+
+  const outcome = new Map<string, string>();
+  for (const p of seq) if (!p.result.ok && p.loadNbr) outcome.set(String(p.loadNbr), 'failed');
+  const dependsOnUnconfirmed = (p: any) => seq.some((q) => q !== p && q.loadNbr
+    && waitsOnQ(p, q)
+    && outcome.get(String(q.loadNbr)) !== 'converged');
+
+  for (const p of ordered) {
+    if (dependsOnUnconfirmed(p)) {
+      p.result.ok = false;
+      p.result.error = 'commitBoard(rwb): a load this move depends on has not confirmed yet — Save again once it lands';
+      outcome.set(String(p.loadNbr), 'failed');
+      continue;
+    }
+    let loadId: any = trustableLoadId(p.L?.loadId) ? p.L.loadId : (p.load?.loadId ?? null);
+    let loadX = p.load;
+    try {
+      // LEVER 1: MEMBERSHIP — plan the arrivals with ONE bulk insertStops (the REAL records, by
+      // stopId), then RE-READ the load so lever 2 has every ordered stop's up-to-date stopId.
+      if (p.arrivals.length) {
+        if (!loadId) { p.result.ok = false; p.result.error = 'commitBoard(rwb): loadId unresolved for insertStops'; outcome.set(String(p.loadNbr), 'failed'); continue; }
+        const ins = await fireSingle(requester, 'insertStops', { insertStopIds: p.arrivals.map((a: any) => a.stopId), loadId }, creds);
+        p.result.steps.push({ op: 'insertStops', ok: !!ins.ok, stopIds: p.arrivals.map((a: any) => a.stopId), error: ins.ok ? null : (ins.error || 'failed') });
+        if (!ins.ok) { p.result.ok = false; p.result.error = `commitBoard(rwb): planning ${p.arrivals.length} stop(s) failed: ${ins.error || 'insertStops failed'}`; outcome.set(String(p.loadNbr), 'failed'); continue; }
+        const f2 = await fetchLoad(requester, String(p.loadNbr), creds);
+        if (!f2.load) { p.result.ok = false; p.result.error = `commitBoard(rwb): load unreadable after planning (${loadMissDiag(p.loadNbr, f2)}) — the ${p.arrivals.length} stop(s) ARE planned; Save again to set the order`; outcome.set(String(p.loadNbr), 'failed'); continue; }
+        loadX = f2.load;
+      }
+
+      const stopIdByNbr2 = new Map<string, string>();
+      for (const s of (loadX?.stops || [])) if (s?.stopNbr != null && s?.stopId != null) stopIdByNbr2.set(String(s.stopNbr), String(s.stopId));
+      const orderedIds: string[] = [];
+      let entryErr: string | null = null;
+      for (const nbr of p.orderedNbrs) {
+        const id = stopIdByNbr2.get(nbr);
+        if (!id) { entryErr = `commitBoard(rwb): stop ${nbr} is not on load ${p.loadNbr} after planning — refusing to sequence it; Save again`; break; }
+        orderedIds.push(id);
+      }
+      if (entryErr) { p.result.ok = false; p.result.error = entryErr; outcome.set(String(p.loadNbr), 'failed'); continue; }
+
+      // LEVER 2: ORDER — the 2-call, SYNCHRONOUS RWB sequence. No convergence poll: the save
+      // either lands or errors in this same call.
+      const rtOriginAddr = loadX?.loadHeader?.rtOrigin?.address;
+      const origin = (rtOriginAddr?.latitude != null && rtOriginAddr?.longitude != null)
+        ? { lat: Number(rtOriginAddr.latitude), lng: Number(rtOriginAddr.longitude) }
+        : DAVIS_DEPOT;
+      const r = await rwbSequenceStops(requester, String(loadId), orderedIds, origin);
+      p.result.steps.push(...r.steps.map((s: any) => ({ ...s, op: `rwb:${s.op}` })));
+      p.result.calls = { rwb: r.calls, inserts: p.arrivals.length ? 1 : 0, infos: p.arrivals.length ? 1 : 0, stopInfos: p.addReads || 0 };
+      if (!r.ok) { p.result.ok = false; p.result.error = r.message; outcome.set(String(p.loadNbr), 'failed'); continue; }
+      outcome.set(String(p.loadNbr), 'converged');
+      loadId = loadId ?? loadX?.loadId;
+    } catch (e: any) {
+      p.result.ok = false; p.result.error = e?.message || 'RWB sequence failed';
+      outcome.set(String(p.loadNbr), 'failed');
+      continue;
+    }
+    if (hasDriverId(p.L?.driverId)) {
+      if (!loadId) { p.result.ok = false; p.result.error = 'commitBoard(rwb): loadId unresolved for assignDriver'; continue; }
+      const r = await fireSingle(requester, 'assignDriver', { routeId: loadId, driverId: p.L.driverId }, creds);
+      p.result.steps.push({ op: 'assignDriver', ok: !!r.ok, result: r, error: r.ok ? null : (r.error || 'failed') });
+      if (!r.ok) { p.result.ok = false; continue; }
+    }
+    if (p.L?.dispatch) {
+      if (!loadId) { p.result.ok = false; p.result.error = 'commitBoard(rwb): loadId unresolved for dispatch'; continue; }
+      const r = await fireSingle(requester, 'dispatchLoad', { routeId: loadId }, creds);
+      p.result.steps.push({ op: 'dispatchLoad', ok: !!r.ok, result: r, error: r.ok ? null : (r.error || 'failed') });
+      if (!r.ok) p.result.ok = false;
+    }
+  }
+
+  const loads = [
+    ...(legacyResult.loads || []),
+    ...seq.map((p) => ({
+      loadNbr: p.result.loadNbr ?? p.loadNbr, loadId: p.load?.loadId ?? p.L?.loadId ?? null,
+      ok: p.result.ok, error: p.result.error, steps: p.result.steps,
+      calls: p.result.calls || undefined,
+      seededStopNbr: p.result.seededStopNbr || undefined, seededLoadNbr: p.result.seededLoadNbr || undefined,
+    })),
+  ];
+  return { ok: loads.every((l: any) => l.ok) && (legacyResult.orphaned || []).length === 0, loads, orphaned: legacyResult.orphaned || [] };
+}
+
 export async function runOp(requester: RequesterLike, op: WriteOp, payload: any, creds: WriteCreds): Promise<any> {
   switch (op) {
-    // The Compare panel's Save: the in-panel toggle sends useImport on the payload, but since
-    // the Jul 2 incident the import engine ALSO needs the server's explicit re-enable
-    // (NUVIZZ_LOAD_IMPORT=1) — otherwise every Save runs the classic anchor engine.
-    case 'commitBoard': return (payload?.useImport === true && !loadImportBlocked())
-      ? runCommitBoardImport(requester, payload, creds)
-      : runCommitBoard(requester, payload, creds);
+    // The Compare panel's Save: the in-panel engine toggle sends useRwb OR useImport on the
+    // payload; both need the server's explicit re-enable (NUVIZZ_RWB_ENABLED / NUVIZZ_LOAD_IMPORT)
+    // — otherwise every Save runs the classic anchor engine. RWB is checked first since a Save
+    // should never carry both flags (the client toggle is one engine at a time).
+    case 'commitBoard':
+      if (payload?.useRwb === true && !rwbEngineBlocked()) return runCommitBoardRwb(requester, payload, creds);
+      return (payload?.useImport === true && !loadImportBlocked())
+        ? runCommitBoardImport(requester, payload, creds)
+        : runCommitBoard(requester, payload, creds);
     case 'commitLoad': return runCommitLoad(requester, payload, creds);
     case 'removeStops': return runRemoveStops(requester, payload, creds);
     case 'assignDriver':

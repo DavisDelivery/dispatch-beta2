@@ -27,6 +27,7 @@
 
 import { WRITE_OPS, MUTATING_OPS, type WriteOp } from './lib/nuvizz-write-ops.mts';
 import { runOp, resolveWriteCreds, loadImportBlocked } from './lib/nuvizz-write.mts';
+import { rwbEngineBlocked } from './lib/nuvizz-rwb.mts';
 import { getNuvizzRequester, setCallTrigger, effectiveDailyCeiling, NuvizzCircuitOpenError } from './lib/nuvizz-request.mts';
 import { isFirestoreEnabled, getDoc, etDayString } from './lib/firestore.mts';
 import { getOpRecord, putOpRecord, priorShortCircuits, recordCreatedOrder, recordAssignment } from './lib/write-registries.mts';
@@ -59,11 +60,14 @@ function planFor(op: WriteOp, payload: any): string[] {
         bits.push('EMPTY the load — remove ALL orders and CANCEL the route');
       } else {
         if (rm) bits.push(`unplan ${rm} order(s) (remove from route)`);
-        // The Confirm modal tells you WHICH engine will fire — the classic anchor engine, or (when
-        // the panel's engine toggle sent useImport) the one-call async import + convergence reads.
-        if (ordered.length) bits.push(payload?.useImport === true && !loadImportBlocked()
-          ? `set ${ordered.length} stop(s) in order (TWO-LEVER IMPORT ENGINE: not-yet-planned orders are first planned with insertStops — real records, never cloned — then ONE full-echo ordering import + convergence read-backs)`
-          : `set ${ordered.length} stop(s) in order (anchor remove + one-at-a-time insert)`);
+        // The Confirm modal tells you WHICH engine will fire — the classic anchor engine, the
+        // async import + convergence reads, or (when the panel's engine toggle sent useRwb) the
+        // 2-call SYNCHRONOUS Route Workbench sequence.
+        if (ordered.length) bits.push(payload?.useRwb === true && !rwbEngineBlocked()
+          ? `set ${ordered.length} stop(s) in order (RWB ENGINE: not-yet-planned orders are first planned with insertStops — real records, never cloned — then a 2-call SYNCHRONOUS Route Workbench sequence, references stops by id only, no async wait)`
+          : payload?.useImport === true && !loadImportBlocked()
+            ? `set ${ordered.length} stop(s) in order (TWO-LEVER IMPORT ENGINE: not-yet-planned orders are first planned with insertStops — real records, never cloned — then ONE full-echo ordering import + convergence read-backs)`
+            : `set ${ordered.length} stop(s) in order (anchor remove + one-at-a-time insert)`);
         // Inline creation (item A, existence-gated since Jul 2): the import itself creates them.
         if (inline) bits.push(`create ${inline} NEW order(s) INLINE in the import (each order # first verified ABSENT in NuVizz — a collision is refused, never cloned)`);
       }
