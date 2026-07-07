@@ -463,9 +463,66 @@ drag-to-reorder / ETA ordering runs through its internal **session-gated** reseq
   even a single non-seq field (`reference1`) on one stop — the endpoint itself is broken/
   unprovisioned here, not our shape. Re-check on prod before ruling it out there.
 - The portal's Route Workbench (`dirouteworkbench/*`, `opt-job/routeopt/resequenceRoute`,
-  `resequenceBuildManualRoute`, `saveComparedRouteData`) does 1-call sequencing/optimize,
-  but is **session cookie + CSRF** only (rejects Basic auth, 401). Would need a server-side
-  portal-login layer (login HAR required).
+  `saveComparedRouteData`) does **1-call sequencing/optimize** and — **now PROVEN
+  (Jul 2026)** — the result **propagates to the load's real `to.seq`** (driver-facing), not
+  just a workbench draft. It's session-gated (Basic-JWT + CSRF + cookies), not the clean
+  Basic-auth surface. Full contract + proof in **§10.1**.
+
+## 10.1 Route Workbench (session-gated) — PROVEN reachable + propagates (Jul 2026)
+
+We replayed a captured UAT dispatch session server-side (from the Netlify container) and
+confirmed the whole resequence path. This is the true 1-call resequence; the §10
+window-encode rebuild (N+2 calls) is the fallback for the clean Basic-auth surface.
+
+**Auth (the reason this is "session-gated").**
+- Header: `Authorization: Basic base64("JWT:" + <token>)` — the Basic *username* is the
+  literal string `JWT`; the *password* is an **auth0-minted HS256 JWT** (`iss:"auth0"`,
+  `sub` = userName, claims carry `companyCode`, `userId`, `roles`, `userType:"DISPATCH"`).
+- **TTL = 900 s (15 min).** Verified: requests 401 within seconds of `exp`; the session
+  cookie does NOT extend it. ⇒ **Hand-captured tokens cannot be replayed** (capture→use
+  latency > 15 min). A server-side login that mints its own token is required.
+- Also required on writes: `_csrf` (form field) + cookies (`SESSION`, `JSESSIONID`, `Instance=ndv2`).
+- Base is the **portal** host `uat.nuvizz.com/deliverit/...`, NOT the openapi v7 host.
+
+**`routePlanId` == `loadId`.** The workbench's `routePlanId` is exactly the load's internal
+`loadId` (confirmed in the response body and via `getLoad`). No extra lookup — our existing
+read already has it.
+
+**The three calls (all `multipart/form-data`):**
+1. `POST dirouteworkbench/routePlan/fetchUpdatedJson` — **read-only** ETA/metrics preview.
+   Fields: `originLat,originLng,originOption,stoplist(<stopId>_PU/_DO,…),routePlanId,returnToDepot,computeLatestEta,_csrf`.
+   ⚠️ **Ignores the order you send** — reversed `stoplist` returned byte-identical `stopSeq`/ETAs/totals.
+   It's a metrics refresh, not the reorder. But it's a **scoring goldmine**: per-stop ETA,
+   `earliestStartDTTM`/`latestStartDTTM`, `plnDistToNxtStop`/`plnDurToNxtStop`, `deadHeadMiles/Mins`,
+   `stemOutMiles/Mins`, `idleTime`, and route `distance`/`duration`/`estRtCost` (OSRM-accurate).
+2. `POST opt-job/routeopt/resequenceRoute` — **NuVizz's 1-call optimizer.**
+   Fields: `routePlanId, stopIdsStr(<stopId>_PU/_DO,…), returnToDepot, seqMode(Far|Near|None), reqSource=RWB_CP, _csrf`.
+   (Quality is poor — see §11 — but it's one call.)
+3. `POST dirouteworkbench/routePlan/saveComparedRouteData` — **1-call commit of an EXACT
+   order** (this is the one we want with our own optimizer). Fields: `routeJsonData` (a
+   JSON *array*, one element), `planningMode=true`, `_csrf`. The element carries
+   `{routePlanId, originLat, originLong, routeStartTime, routeEndTime, routeDistance,
+   transitTime, seqMode:"Manual", stopDataJsonArray:[{stopId,plannedETA,tripId,timeZone,…}],
+   tripDataJsonArray:[…ordered tripIds…], list:"list1"}`. **The order lives in
+   `tripDataJsonArray`** (ordered `tripId`s = `stopId` minus the `_PU`/`_DO` suffix; all PU
+   tripIds, then DO in visit order).
+
+**Propagation proof (no session needed to verify).** After the session's optimize, a plain
+`getLoad LOAD000113021` (ABC5) showed `to.seq` **decoupled from the delivery windows** —
+e.g. `ABC5S8` (11:30 window) at seq 3, ahead of `ABC5S1` (08:00 window) at seq 5. Only a
+real resequence can produce that, so the RWB write reaches the driver-facing sequence.
+
+**To use it in the app we must build a server-side portal-login layer** that (a) logs a
+dispatch user into UAT (`loginqa.nuvizz.com` / tenant `DAVISV5`) to mint the auth0 JWT,
+(b) obtains a `_csrf` token + session cookie, then (c) calls `resequenceRoute` (their
+optimize) or `saveComparedRouteData` (our exact order). **Missing piece: the login HAR**
+(`loginqa.nuvizz.com`) showing how username/password → JWT and where `_csrf` is issued.
+
+**Two roads to 1-call resequence (pick one):**
+- **A — openapi `routePlan/update` (§10):** clean Basic auth, no session layer, but 500s
+  until NuVizz enables the route-plan integration service. One email to NuVizz unblocks it.
+- **B — RWB `saveComparedRouteData` (this section):** works TODAY, but we build+maintain the
+  portal-login+CSRF layer and manage the 15-min token refresh.
 
 ## 11. Route OPTIMIZATION — do it yourself
 
