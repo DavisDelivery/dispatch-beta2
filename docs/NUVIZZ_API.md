@@ -462,10 +462,55 @@ drag-to-reorder / ETA ordering runs through its internal **session-gated** reseq
   per call), but on UAT DAVISV5 it **500s "Something Went Wrong"** for EVERY payload,
   even a single non-seq field (`reference1`) on one stop — the endpoint itself is broken/
   unprovisioned here, not our shape. Re-check on prod before ruling it out there.
-- The portal's Route Workbench (`dirouteworkbench/*`, `opt-job/routeopt/resequenceRoute`,
-  `resequenceBuildManualRoute`, `saveComparedRouteData`) does 1-call sequencing/optimize,
-  but is **session cookie + CSRF** only (rejects Basic auth, 401). Would need a server-side
-  portal-login layer (login HAR required).
+- The portal's Route Workbench (`dirouteworkbench/*`) does 1-call sequencing — it was long
+  thought session/CSRF-gated, but is now **CRACKED and wired**. See §10.2.
+
+## 10.2 Route Workbench (RWB) — the 2-call reorder (CRACKED, wired behind "RWB mode")
+
+The clean API's ordering lever (§10.1) is a heavy full-echo import that risks blanking
+freight fields if any echo is incomplete. The portal's own Route Workbench sets the whole
+sequence in **2 calls** and — critically — **references stops by id, never rewriting the
+stop record**, so skids / item lines / addresses cannot be lost. UAT-proven Jul 2026:
+byte-for-byte stop snapshots before/after showed ONLY `to.seq`, ETAs, leg distances, and
+audit stamps changed; every cargo/address field was identical.
+
+**Auth (reverse-engineered, server-side in `netlify/functions/nuvizz-rwb.cjs`):**
+1. `GET {loginBase}/loginreg/` → `SESSION` cookie + `<meta _csrf>` token
+2. `POST {loginBase}/loginreg/reg/checkCompanyLogin` `{companyCode, appCode:"portal"}`
+3. `POST {loginBase}/loginreg/auth/userLogin` (multipart) → JWT at `data.data.jwtToken`
+4. `POST {portalBase}/deliverit/instance/ndv2/openapi/loginreg/authtoken/{COMPANY}`
+   `{username:"jwt", password:JWT}` → `authToken`
+5. RWB calls: `Authorization: Basic base64("JWT:"+authToken)` + `Cookie: Instance=ndv2`
+   - loginBase: PROD `login.nuvizz.com`, UAT/QA `loginqa.nuvizz.com`
+   - authToken is short-lived (~15 min); re-login on 401. Writes need NO `_csrf` under Basic-JWT.
+
+**The reorder (2 calls, flat regardless of stop count):**
+- `routePlanId` == the openapi `loadId` (no extra lookup).
+- Delivery-from-depot model: `stoplist` = all `{stopId}_PU` (depot pickups) then all
+  `{stopId}_DO` (dropoffs) in the DESIRED visit order.
+1. `POST dirouteworkbench/routePlan/fetchUpdatedJson` (multipart: `originLat/Lng`,
+   `originOption:02`, `stoplist`, `routePlanId`, `returnToDepot:NEVER`,
+   `computeLatestEta:true`) → recomputed route preview (read-only): `{distance, duration,
+   deadHeadMiles, deadHeadMins, idleTime, schStartTime, etaStopVOList[]}`.
+2. `POST dirouteworkbench/routePlan/saveComparedRouteData` (multipart: `routeJsonData`
+   JSON-string, `planningMode:true`) → PERSISTS.
+
+> ⚠️ `saveComparedRouteData` is a **destructive full-replace of the route** — an incomplete
+> `routeJsonData` CANCELS the load (learned the hard way: an early payload missing
+> `tripDataJsonArray` / `list` / `totalData` / `totalTrips` / the route window cancelled a
+> test load). The working payload echoes ALL of: `routePlanId, originLat/Long, route
+> Start/EndTime, routeDistance, transitTime, totalTrips, totalData, IdleTime, buildType:'02',
+> isStandingRoute:false, seqMode:'Manual', deadHeadMins/Miles, tripDataJsonArray:[stopIds],
+> list:'list1', stopDataJsonArray:[{stopId:'{id}_PU|_DO', tripId:id, routePlanId, timeZone,
+> plannedETA:'', etaCode:'', timeLapse:''}]`. Only reorder an UNASSIGNED/undispatched load
+> while testing — on an assigned+dispatched load the save pushes live to the driver.
+
+**Wiring:** `src/lib/nuvizzRwb.js` (`rwbSequenceStops`, `rwbEnabled`, `rwbProbe`) →
+`usePlanning().commitRwb` → Dispatch page **"RWB mode"** toggle. Mode ON: membership still
+rides `insertStops`/`removeStops` (1 call each), ORDER rides the 2-call RWB path (skipped
+when the order already matches). A pure reorder = 2 calls; plan+sequence = 3–4. Estimate
+for a build day (70 routes / 700 orders / 1.25 optimize passes, session held): **~245
+calls** (70 bulk inserts + 175 sequence calls) vs ~1,100+ on the one-at-a-time path.
 
 ## 11. Route OPTIMIZATION — do it yourself
 

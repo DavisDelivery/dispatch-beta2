@@ -17,6 +17,7 @@ import { useCallback, useState } from 'react'
 import { getLoad, insertStops, removeStops, assignDriver, dispatchLoad as apiDispatchLoad, assignOk, normalizeLoad, summarize } from '../lib/nuvizzWrite.js'
 import { applyLoadOrder } from '../lib/loadImportEngine.js'
 import { planCommitOrder } from '../lib/loadImport.js'
+import { rwbSequenceStops } from '../lib/nuvizzRwb.js'
 import { useCreatedOrders } from './useCreatedOrders.js'
 import { KNOWN_LOADS } from '../lib/loads.js'
 
@@ -292,5 +293,89 @@ export function usePlanning() {
     [orders, setPlanned],
   )
 
-  return { orders, plan, unplan, reconcile, dispatchDriver, dispatchLoad, sequenceByLoad, sequenceLoad, commit }
+  // RWB-mode commit — the same board arrangement, but ORDER is set through the proven
+  // 2-call Route Workbench path (docs/NUVIZZ_API.md §10.2) instead of the full-echo
+  // import engine. Membership still rides openapi insertStops/removeStops (1 call each,
+  // already minimal). Phases run sources-before-destinations so a stop is never inserted
+  // onto its new load while still on the old one:
+  //   1. RELEASE  — removeStops for every departure (order left its load)
+  //   2. PLAN     — insertStops arrivals onto each destination (must precede sequence:
+  //                 RWB sequences stops already ON the route)
+  //   3. SEQUENCE — one rwbSequenceStops per load whose order changed (2 calls; skipped
+  //                 when the desired order already matches, so a pure move costs 0 here)
+  // Data integrity: saveComparedRouteData references stops by id and never rewrites the
+  // stop record — freight/addresses/item lines are untouched (byte-verified, Jul 2026).
+  const commitRwb = useCallback(
+    async (desiredByLoad) => {
+      const desiredLoadOf = new Map()
+      for (const [loadNbr, list] of desiredByLoad) for (const o of list) desiredLoadOf.set(o.stopNbr, loadNbr)
+
+      // Departures grouped by the load they leave.
+      const departByLoad = new Map()
+      for (const o of orders) {
+        const base = o.plannedLoadNbr || null
+        const want = desiredLoadOf.get(o.stopNbr) || null
+        if (base && base !== want) {
+          if (!departByLoad.has(base)) departByLoad.set(base, [])
+          departByLoad.get(base).push(o)
+        }
+      }
+
+      let calls = 0
+      const errors = []
+
+      // 1) RELEASE
+      for (const [loadNbr, group] of departByLoad) {
+        const ids = group.map((o) => o.stopId).filter(Boolean)
+        if (!ids.length) continue
+        const r = summarize(await removeStops({}, loadNbr, ids))
+        calls++
+        if (r.ok) setPlanned(group.map((o) => o.stopNbr), null)
+        else errors.push(`unplan ${loadNbr}: ${r.message}`)
+      }
+
+      // 2) PLAN arrivals onto each destination
+      for (const [loadNbr, list] of desiredByLoad) {
+        const arrivals = list.filter((o) => (o.plannedLoadNbr || null) !== loadNbr && o.stopId)
+        if (!arrivals.length) continue
+        try {
+          const loadId = await resolveLoadId(loadNbr)
+          const r = summarize(await insertStops({}, loadId, arrivals.map((o) => o.stopId)))
+          calls++
+          if (!r.ok) errors.push(`plan ${loadNbr}: ${r.message}`)
+        } catch (e) {
+          errors.push(`plan ${loadNbr}: ${e.message}`)
+        }
+      }
+
+      // 3) SEQUENCE each destination whose order changed
+      for (const [loadNbr, list] of desiredByLoad) {
+        const orderedStopNbrs = list.map((o) => o.stopNbr)
+        const orderedStopIds = list.map((o) => o.stopId).filter(Boolean)
+        const cur = sequenceByLoad[loadNbr] || []
+        const sameOrder = cur.length === orderedStopNbrs.length && cur.every((sn, i) => sn === orderedStopNbrs[i])
+        if (orderedStopIds.length >= 2 && !sameOrder) {
+          try {
+            const loadId = await resolveLoadId(loadNbr)
+            const r = await rwbSequenceStops({ routePlanId: loadId, orderedStopIds })
+            calls += r.calls || 0
+            if (!r.ok) errors.push(`sequence ${loadNbr}: ${r.message}`)
+          } catch (e) {
+            errors.push(`sequence ${loadNbr}: ${e.message}`)
+          }
+        }
+        setPlanned(orderedStopNbrs, loadNbr)
+        setSequenceByLoad((m) => ({ ...m, [loadNbr]: orderedStopNbrs }))
+      }
+
+      return {
+        ok: !errors.length,
+        message: errors.length ? errors.join(' · ') : `Committed via RWB (${calls} call${calls === 1 ? '' : 's'}).`,
+        calls,
+      }
+    },
+    [orders, sequenceByLoad, resolveLoadId, setPlanned],
+  )
+
+  return { orders, plan, unplan, reconcile, dispatchDriver, dispatchLoad, sequenceByLoad, sequenceLoad, commit, commitRwb }
 }
