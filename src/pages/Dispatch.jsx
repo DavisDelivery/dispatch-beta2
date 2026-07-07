@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { PackagePlus, Truck, Inbox, ArrowRight, X, CheckCircle2, AlertCircle, Package, LayoutGrid, Map as MapIcon, GripVertical, User, RefreshCw, Send, ChevronUp, ChevronDown, Save, Undo2 } from 'lucide-react'
+import { PackagePlus, Truck, Inbox, ArrowRight, X, CheckCircle2, AlertCircle, Package, LayoutGrid, Map as MapIcon, GripVertical, User, RefreshCw, Send, ChevronUp, ChevronDown, Save, Undo2, Zap } from 'lucide-react'
 import { usePlanning } from '../hooks/usePlanning.js'
 import { useGeocode } from '../hooks/useGeocode.js'
 import { useBoardDrag } from '../hooks/useBoardDrag.js'
 import { useAssignments } from '../hooks/useAssignments.js'
+import { rwbEnabled, setRwbEnabled, rwbProbe } from '../lib/nuvizzRwb.js'
 import { KNOWN_LOADS } from '../lib/loads.js'
 import { KNOWN_DRIVERS } from '../lib/drivers.js'
 import DispatchMap from '../components/dispatch/DispatchMap.jsx'
@@ -30,10 +31,13 @@ function Stat({ icon: Icon, label, value, tone = 'text-foreground' }) {
 }
 
 export default function Dispatch() {
-  const { orders, reconcile, dispatchDriver, dispatchLoad, sequenceByLoad, commit } = usePlanning()
+  const { orders, reconcile, dispatchDriver, dispatchLoad, sequenceByLoad, commit, commitRwb } = usePlanning()
   const { byStop: coords } = useGeocode(orders)
   const { assignments, assign } = useAssignments()
   const [syncing, setSyncing] = useState(false)
+  // RWB mode = commit ORDER through the 2-call Route Workbench path (vs the legacy engine).
+  const [rwb, setRwb] = useState(rwbEnabled())
+  const [probing, setProbing] = useState(false)
   const [sel, setSel] = useState(() => new Set())
   const [target, setTarget] = useState('')
   const [busy, setBusy] = useState(false)
@@ -163,7 +167,7 @@ export default function Dispatch() {
         .filter((o) => o && placeOf(o) === loadNbr && o.stopId)
       if (ord.length) desiredByLoad.push([loadNbr, ord])
     }
-    const r = await commit(desiredByLoad)
+    const r = await (rwb ? commitRwb : commit)(desiredByLoad)
     setToast(r)
     if (r.ok) {
       setDraft(null)
@@ -172,6 +176,28 @@ export default function Dispatch() {
     setBusy(false)
   }
   const onDiscard = () => setDraft(null)
+
+  // Toggle RWB mode. Turning it ON runs a login probe first so Chad gets immediate
+  // confirmation the portal session works before relying on the 2-call path.
+  const onToggleRwb = useCallback(async () => {
+    if (rwb) {
+      setRwbEnabled(false)
+      setRwb(false)
+      setToast({ ok: true, message: 'RWB mode off — commits use the legacy import engine.' })
+      return
+    }
+    setProbing(true)
+    setToast(null)
+    const p = await rwbProbe()
+    setProbing(false)
+    if (!p.ok) {
+      setToast({ ok: false, message: `RWB portal login failed${p.error ? ` (${p.error})` : ''} — staying on the legacy engine.` })
+      return
+    }
+    setRwbEnabled(true)
+    setRwb(true)
+    setToast({ ok: true, message: 'RWB mode ON — reorders now commit in 2 calls, freight data preserved.' })
+  }, [rwb])
 
   // ---- Reconcile (read NuVizz reality) ----
   const doSync = useCallback(
@@ -239,6 +265,19 @@ export default function Dispatch() {
           <RefreshCw className={cn('h-4 w-4', syncing && 'animate-spin')} />
           {syncing ? 'Syncing…' : 'Sync'}
         </Button>
+        <button
+          type="button"
+          onClick={onToggleRwb}
+          disabled={probing}
+          title={rwb ? 'RWB mode ON — sequencing commits in 2 portal calls (freight data preserved). Click to disable.' : 'Enable Route Workbench mode — 2-call reorders instead of the heavier import engine.'}
+          className={cn(
+            'focus-ring inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors',
+            rwb ? 'border-primary/50 bg-primary/15 text-primary' : 'border-border bg-card text-muted-foreground hover:text-foreground',
+          )}
+        >
+          <Zap className={cn('h-4 w-4', rwb && 'fill-current')} />
+          {probing ? 'Checking…' : rwb ? 'RWB ON' : 'RWB off'}
+        </button>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {sel.size > 0 && <Badge tone="primary">{sel.size} selected</Badge>}
@@ -266,7 +305,10 @@ export default function Dispatch() {
       {dirty && (
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2">
           <Save className="h-4 w-4 text-primary" />
-          <span className="text-sm font-medium text-foreground">Unsaved arrangement — nothing is in NuVizz until you commit.</span>
+          <span className="text-sm font-medium text-foreground">
+            Unsaved arrangement — nothing is in NuVizz until you commit.
+            {rwb && <span className="ml-1.5 inline-flex items-center gap-1 rounded bg-primary/15 px-1.5 py-0.5 text-[11px] font-semibold text-primary"><Zap className="h-3 w-3 fill-current" /> RWB 2-call</span>}
+          </span>
           <div className="ml-auto flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={onDiscard} disabled={busy}>
               <Undo2 className="h-4 w-4" /> Discard
